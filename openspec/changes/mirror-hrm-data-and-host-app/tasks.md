@@ -74,8 +74,8 @@ New, replacing the retired mechanism:
 
 ## 4. Move the derivation onto the mirror
 
-- [ ] 4.1 Read selection, joining, outcome and vehicle attachment, address reduction, doorway location and census placement from the mirror, and verify no network request is issued during a derivation
-- [ ] 4.4 Move retry and paging out of the derivation into the mirror, and verify the census layer is read locally like every other layer, closing the retry asymmetry recorded as D14a — done with 4.1, in the new mirror derivation rather than in `src/hotspots.py`, which stays stdlib-only and live as the baseline 4.9 reconciles against **[was 12.1]**
+- [x] 4.1 Read selection, joining, outcome and vehicle attachment, address reduction, doorway location and census placement from the mirror, and verify no network request is issued during a derivation
+- [x] 4.4 Move retry and paging out of the derivation into the mirror, and verify the census layer is read locally like every other layer, closing the retry asymmetry recorded as D14a — done with 4.1, in the new mirror derivation rather than in `src/hotspots.py`, which stays stdlib-only and live as the baseline 4.9 reconciles against **[was 12.1]**
 - [ ] 4.2 Remove the live-fallback path entirely, and verify a record absent from the mirror is reported as absent rather than fetched from the source
 - [ ] 4.3 Report a derivation running against an unreconciled mirror as such, and verify the derivation does not top up missing rows itself
 - [ ] 4.5 Preserve census containment correctness including interior holes, and verify agreement with the authoritative spatial answer on the same six addresses the original implementation was verified against

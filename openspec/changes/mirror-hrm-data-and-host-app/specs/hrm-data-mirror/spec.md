@@ -89,6 +89,8 @@ The poll SHALL run at least daily. The pull SHALL run only when the poll reports
 
 These are two cadences and SHALL NOT be collapsed into one. The poll is one metadata request per layer with no paging, cheap enough to run nightly without meaningfully loading the service, and running it nightly bounds how far behind the source the mirror can fall to one day. The pull is the expensive half and has no reason to run on a night when the source has published nothing.
 
+The poll therefore gates every pull; nothing pulls on its own schedule. This rests on the layers being published snapshots — they declare static data and offer only `Query` and `Extract` — which is inferred from service metadata, not observed from HRM's publishing practice. An edit that did not advance the timestamp would go unseen. That risk is accepted for now and is subject to revision once HRM's actual update method is better understood.
+
 No published HRM refresh schedule is known. The system SHALL therefore record the source's last-edit timestamp with every sync so that the interval between source updates accumulates as measurement, and SHALL derive any statement about when the next source update is expected from that observed history. Where insufficient history exists, the system SHALL report the next source update as not yet known rather than estimating one.
 
 A layer that does not change — the census dissemination areas have not been edited since 2024-03-19 — SHALL NOT be re-pulled merely because a schedule fired.
@@ -118,10 +120,11 @@ A layer that does not change — the census dissemination areas have not been ed
 - **WHEN** a layer's last-edit timestamp has not advanced in months
 - **THEN** it is not re-pulled
 
-#### Scenario: Poll accelerates but does not gate
+#### Scenario: Poll gates every pull, an accepted risk
 
-- **WHEN** the last-edit timestamp does not advance despite rows having changed
-- **THEN** the watermark pull and open-set refetch still run on their own schedule
+- **WHEN** rows change at the source without the layer's last-edit timestamp advancing
+- **THEN** no pull runs and the mirror keeps the version it holds, and this gap is recorded as an accepted risk rather than covered by a backstop
+- **AND** the acceptance is revisited if research into how HRM updates its source shows edits that do not advance the timestamp, at which point a pull independent of the poll becomes required
 
 ### Requirement: Run unattended
 
