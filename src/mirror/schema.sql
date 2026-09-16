@@ -223,6 +223,16 @@ CREATE TABLE IF NOT EXISTS list_snapshots (
 CREATE INDEX IF NOT EXISTS list_snapshots_type_derived_idx
     ON list_snapshots (violation_type, derived_at DESC);
 
+-- The published version of each tracked layer at the moment this snapshot was
+-- derived -- {"service_requests": "<source_last_edit>", ...} -- so "what was this
+-- derived from" survives independently of `parameters` (which carries the
+-- thresholds, not the data version) and of `sync_run_id` (one run against one
+-- layer; a derivation reads all three). Added after the three tables above via
+-- ALTER ... ADD COLUMN IF NOT EXISTS, so apply_schema stays safe to re-run
+-- against a store that already has list_snapshots.
+ALTER TABLE list_snapshots
+    ADD COLUMN IF NOT EXISTS mirror_version jsonb NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE TABLE IF NOT EXISTS doorway_list_history (
     snapshot_id       bigint NOT NULL REFERENCES list_snapshots (id) ON DELETE CASCADE,
     address           text NOT NULL,

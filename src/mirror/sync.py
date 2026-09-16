@@ -724,6 +724,16 @@ def sync(conn, layers=None, now=None, force_pull=False, poll_only=False,
                                                  log)
         outcome["layers"][layer.key] = entry
 
+    # 8.6: retain the doorway and block lists this sync produced, so which doorway
+    # left the list and when survives without git. Local import: history.py reads
+    # this module's `utcnow`/`start_run`/`finish`/`record_anomaly`, so importing it
+    # up front would be circular -- by the time `sync()` actually runs, this
+    # module has finished initializing, so the import below is safe. See
+    # `mirror/history.py`'s module docstring for why this only fires when
+    # `outcome["pulled"]` is non-empty.
+    from mirror import history
+    outcome["snapshots"] = history.snapshot_after_sync(conn, outcome, now, log=log)
+
     return outcome
 
 
@@ -763,6 +773,14 @@ def describe(outcome):
             )
     if not outcome["pulled"]:
         lines.append("no layer was reloaded: no published version advanced")
+    for snap in outcome.get("snapshots") or []:
+        if snap["ok"]:
+            lines.append(f"  retained {snap['violation_type']}: "
+                         f"{snap['doorways']} doorways, {snap['blocks']} blocks "
+                         f"(snapshot {snap['snapshot_id']})")
+        else:
+            lines.append(f"  retained {snap['violation_type']}: FAILED — "
+                         f"{snap['error']}")
     return "\n".join(lines)
 
 

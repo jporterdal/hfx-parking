@@ -16,6 +16,7 @@ static test below proves the stronger claim that no code path *could* reach one.
 """
 
 import ast
+import csv
 import datetime
 import inspect
 
@@ -239,16 +240,24 @@ def insert_service_request(conn, object_id, request_id, address, date_initiated,
     conn.commit()
 
 
-def seed_driveway_call(conn, request_id, object_id, address, when,
-                       towed="N", make="FORD", model="F150", colour="BLUE",
-                       owner="HRM", lat=44.65, lon=-63.57):
+def seed_call(conn, request_id, object_id, address, when, label,
+             towed="N", make="FORD", model="F150", colour="BLUE",
+             owner="HRM", lat=44.65, lon=-63.57):
     insert_service_request(conn, object_id, request_id, address, when, lat=lat, lon=lon)
-    insert_custom_field(conn, object_id * 10, request_id, "Alleged Violation", "DRIVEWAY")
+    insert_custom_field(conn, object_id * 10, request_id, "Alleged Violation", label)
     insert_custom_field(conn, object_id * 10 + 1, request_id, "Vehicle Was Towed", towed)
     insert_custom_field(conn, object_id * 10 + 2, request_id, "Property Ownership", owner)
     insert_custom_field(conn, object_id * 10 + 3, request_id, "Vehicle Make", make)
     insert_custom_field(conn, object_id * 10 + 4, request_id, "Vehicle Model", model)
     insert_custom_field(conn, object_id * 10 + 5, request_id, "Vehicle Colour", colour)
+
+
+def seed_driveway_call(conn, request_id, object_id, address, when,
+                       towed="N", make="FORD", model="F150", colour="BLUE",
+                       owner="HRM", lat=44.65, lon=-63.57):
+    seed_call(conn, request_id, object_id, address, when, "DRIVEWAY",
+             towed=towed, make=make, model=model, colour=colour, owner=owner,
+             lat=lat, lon=lon)
 
 
 def test_load_returns_calls_shaped_like_hotspots_load(clean_db):
@@ -418,8 +427,394 @@ def test_derive_district_filter_narrows_the_doorway_list(clean_db):
 def test_derive_with_no_matching_calls_returns_empty_result(clean_db):
     result = derive.derive(clean_db, violation="Driveway")
 
-    assert result == {"rows": [], "blocks": [], "calls": [], "fields": result["fields"],
-                      "latest": None}
+    figures = {k: v for k, v in result.items()
+              if k not in ("derived_at", "last_sync_success_at",
+                           "most_recent_call_date", "reconciled")}
+    assert figures == {
+        "rows": [], "blocks": [], "calls": [], "fields": result["fields"],
+        "latest": None, "missing_service_request_ids": [],
+    }
+
+
+# --------------------------------------------------- absent, not fetched (4.2)
+
+
+def test_derive_reports_a_selected_id_missing_from_service_requests(clean_db):
+    """4.2's first concrete shape of "absent": a request id the selection query
+    named (it carries a matching `Alleged Violation` custom field) but that
+    `service_requests` does not hold -- a gap a live-fallback would have papered
+    over by fetching it. There is no such path here (see the module docstring and
+    `test_derivation_module_never_imports_source_fetch_functions`), so it is
+    reported instead.
+    """
+    when = datetime.datetime(2024, 7, 15, 12, 0, tzinfo=datetime.UTC)
+    seed_driveway_call(clean_db, 2001, 1, "10 QUEEN ST, HALIFAX", when)
+    # A custom field naming a call with no corresponding service_requests row.
+    insert_custom_field(clean_db, 99, 9999, "Alleged Violation", "DRIVEWAY")
+
+    result = derive.derive(clean_db, violation="Driveway")
+
+    assert result["missing_service_request_ids"] == [9999]
+    # Not topped up: the missing id never appears in `calls`.
+    assert 9999 not in {c["REQUEST_ID"] for c in result["calls"]}
+    assert {c["REQUEST_ID"] for c in result["calls"]} == {2001}
+
+
+def test_derive_missing_ids_empty_when_every_selected_id_is_found(clean_db):
+    when = datetime.datetime(2024, 7, 15, 12, 0, tzinfo=datetime.UTC)
+    seed_driveway_call(clean_db, 2001, 1, "10 QUEEN ST, HALIFAX", when)
+
+    result = derive.derive(clean_db, violation="Driveway")
+
+    assert result["missing_service_request_ids"] == []
+
+
+def test_derive_reports_addresses_with_no_census_block_match(clean_db):
+    """4.2's second shape of "absent": a doorway whose coordinates match no held
+    census polygon. Already visible per row (`row["block"]` is falsy); this checks
+    it is also surfaced as a count on the result, not merely left to a reader who
+    happens to inspect every row.
+    """
+    when = datetime.datetime(2026, 6, 1, 12, 0, tzinfo=datetime.UTC)
+    # No census_areas row inserted at all -- every doorway is outside every block.
+    seed_driveway_call(clean_db, 3001, 1, "1 LONE ST, HALIFAX", when, lat=0.5, lon=0.5)
+    seed_driveway_call(clean_db, 3002, 2, "1 LONE ST, HALIFAX",
+                       when - datetime.timedelta(days=1), lat=0.5, lon=0.5)
+
+    result = derive.derive(clean_db, violation="Driveway")
+
+    assert len(result["rows"]) == 1
+    assert result["rows"][0]["block"] in (None, "")
+    assert result["unmatched_census_count"] == 1
+
+
+# ------------------------------------------------------ reconciliation state (4.3)
+
+
+def insert_sync_run(conn, layer, ok=True, reconciled=True, started_at=None):
+    started_at = started_at or datetime.datetime.now(datetime.UTC)
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO sync_runs (kind, layer, started_at, finished_at, ok, "
+            "reconciled) VALUES (%s, %s, %s, %s, %s, %s)",
+            ("reload", layer, started_at, started_at, ok, reconciled),
+        )
+    conn.commit()
+
+
+def insert_layer_state(conn, layer, last_success_at=None, static=False):
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO layer_state (layer, last_success_at, static) "
+            "VALUES (%s, %s, %s) ON CONFLICT (layer) DO UPDATE SET "
+            "last_success_at = EXCLUDED.last_success_at, static = EXCLUDED.static",
+            (layer, last_success_at, static),
+        )
+    conn.commit()
+
+
+def test_reconciliation_state_true_when_every_currency_layer_reconciled(clean_db):
+    insert_sync_run(clean_db, "service_requests", reconciled=True)
+    insert_sync_run(clean_db, "custom_fields", reconciled=True)
+
+    state = derive.reconciliation_state(clean_db)
+
+    assert state == {
+        "reconciled": True,
+        "per_layer": {"service_requests": True, "custom_fields": True},
+    }
+
+
+def test_reconciliation_state_false_when_one_layer_diverged(clean_db):
+    insert_sync_run(clean_db, "service_requests", reconciled=True)
+    insert_sync_run(clean_db, "custom_fields", reconciled=False)
+
+    state = derive.reconciliation_state(clean_db)
+
+    assert state["reconciled"] is False
+    assert state["per_layer"] == {"service_requests": True, "custom_fields": False}
+
+
+def test_reconciliation_state_unknown_when_no_sync_ever_recorded(clean_db):
+    state = derive.reconciliation_state(clean_db)
+
+    assert state == {
+        "reconciled": False,
+        "per_layer": {"service_requests": None, "custom_fields": None},
+    }
+
+
+def test_reconciliation_state_uses_the_latest_run_per_layer(clean_db):
+    insert_sync_run(clean_db, "service_requests", reconciled=False,
+                    started_at=datetime.datetime(2026, 6, 1, tzinfo=datetime.UTC))
+    insert_sync_run(clean_db, "service_requests", reconciled=True,
+                    started_at=datetime.datetime(2026, 6, 2, tzinfo=datetime.UTC))
+    insert_sync_run(clean_db, "custom_fields", reconciled=True)
+
+    state = derive.reconciliation_state(clean_db)
+
+    assert state["per_layer"]["service_requests"] is True
+    assert state["reconciled"] is True
+
+
+def test_reconciliation_state_ignores_a_failed_attempt(clean_db):
+    """A more recent *failed* sync attempt (kind carries no reconciliation
+    outcome, `ok=False`) must not shadow the last successful attempt's verdict --
+    otherwise a sync that starts failing right after a clean reconciliation would
+    make an agreeing mirror read as unreconciled for no evidential reason.
+    """
+    insert_sync_run(clean_db, "service_requests", reconciled=True,
+                    started_at=datetime.datetime(2026, 6, 1, tzinfo=datetime.UTC))
+    insert_sync_run(clean_db, "service_requests", ok=False, reconciled=None,
+                    started_at=datetime.datetime(2026, 6, 2, tzinfo=datetime.UTC))
+    insert_sync_run(clean_db, "custom_fields", reconciled=True)
+
+    state = derive.reconciliation_state(clean_db)
+
+    assert state["per_layer"]["service_requests"] is True
+    assert state["reconciled"] is True
+
+
+def test_reconciliation_state_a_newer_null_row_does_not_shadow_an_older_true(clean_db):
+    """A successful run that never recorded a count comparison (reconciled is
+    NULL -- a no-op poll, or a pre-3.5 row) is not evidence either way, so it must
+    not hide the last run that actually did record one.
+    """
+    insert_sync_run(clean_db, "service_requests", reconciled=True,
+                    started_at=datetime.datetime(2026, 6, 1, tzinfo=datetime.UTC))
+    insert_sync_run(clean_db, "service_requests", reconciled=None,
+                    started_at=datetime.datetime(2026, 6, 2, tzinfo=datetime.UTC))
+    insert_sync_run(clean_db, "custom_fields", reconciled=True)
+
+    state = derive.reconciliation_state(clean_db)
+
+    assert state["per_layer"]["service_requests"] is True
+    assert state["reconciled"] is True
+
+
+def test_reconciliation_state_a_newer_null_row_does_not_shadow_an_older_false(clean_db):
+    """Same rule in the other direction: a later no-op poll must not paper over a
+    divergence an earlier run actually observed.
+    """
+    insert_sync_run(clean_db, "service_requests", reconciled=False,
+                    started_at=datetime.datetime(2026, 6, 1, tzinfo=datetime.UTC))
+    insert_sync_run(clean_db, "service_requests", reconciled=None,
+                    started_at=datetime.datetime(2026, 6, 2, tzinfo=datetime.UTC))
+    insert_sync_run(clean_db, "custom_fields", reconciled=True)
+
+    state = derive.reconciliation_state(clean_db)
+
+    assert state["per_layer"]["service_requests"] is False
+    assert state["reconciled"] is False
+
+
+def test_reconciliation_state_none_when_only_null_rows_recorded(clean_db):
+    """A layer whose only successful runs are no-op polls has never recorded a
+    reconciliation outcome at all -- that reads the same as no successful sync
+    ever having run, not as an observed divergence.
+    """
+    insert_sync_run(clean_db, "service_requests", reconciled=None,
+                    started_at=datetime.datetime(2026, 6, 1, tzinfo=datetime.UTC))
+    insert_sync_run(clean_db, "service_requests", reconciled=None,
+                    started_at=datetime.datetime(2026, 6, 2, tzinfo=datetime.UTC))
+    insert_sync_run(clean_db, "custom_fields", reconciled=True)
+
+    state = derive.reconciliation_state(clean_db)
+
+    assert state["per_layer"]["service_requests"] is None
+    assert state["reconciled"] is False
+
+
+def test_derive_result_carries_the_reconciliation_state(clean_db):
+    when = datetime.datetime(2024, 7, 15, 12, 0, tzinfo=datetime.UTC)
+    seed_driveway_call(clean_db, 2001, 1, "10 QUEEN ST, HALIFAX", when)
+    insert_sync_run(clean_db, "service_requests", reconciled=True)
+    insert_sync_run(clean_db, "custom_fields", reconciled=True)
+
+    result = derive.derive(clean_db, violation="Driveway")
+
+    assert result["reconciled"] == {
+        "reconciled": True,
+        "per_layer": {"service_requests": True, "custom_fields": True},
+    }
+
+
+def test_derive_does_not_top_up_missing_rows_when_unreconciled(clean_db):
+    """4.3: a derivation against a mirror whose latest reconciliation diverged
+    still reports itself as unreconciled, and still derives from exactly what the
+    mirror holds -- it neither hides the gap nor closes it. There is no code path
+    here that could close it: no network import exists in this module at all
+    (`test_derivation_module_never_imports_source_fetch_functions`).
+    """
+    when = datetime.datetime(2024, 7, 15, 12, 0, tzinfo=datetime.UTC)
+    seed_driveway_call(clean_db, 2001, 1, "10 QUEEN ST, HALIFAX", when)
+    insert_sync_run(clean_db, "service_requests", reconciled=False)
+    insert_sync_run(clean_db, "custom_fields", reconciled=True)
+    # The kind of gap an unreconciled mirror can carry: a custom field naming a
+    # call the held service_requests table does not have.
+    insert_custom_field(clean_db, 900, 9999, "Alleged Violation", "DRIVEWAY")
+
+    result = derive.derive(clean_db, violation="Driveway")
+
+    assert result["reconciled"]["reconciled"] is False
+    assert result["reconciled"]["per_layer"]["service_requests"] is False
+    assert 9999 in result["missing_service_request_ids"]
+    assert {c["REQUEST_ID"] for c in result["calls"]} == {2001}
+
+
+# --------------------------------------------------------- freshness clocks (4.7)
+
+
+def test_derive_result_carries_all_three_clocks_together(clean_db):
+    when = datetime.datetime(2026, 6, 1, 12, 0, tzinfo=datetime.UTC)
+    seed_driveway_call(clean_db, 3001, 1, "1 A ST, HALIFAX", when)
+    sync_time = datetime.datetime(2026, 6, 2, 3, 0, tzinfo=datetime.UTC)
+    insert_layer_state(clean_db, "service_requests", last_success_at=sync_time)
+    insert_layer_state(clean_db, "custom_fields", last_success_at=sync_time)
+
+    result = derive.derive(clean_db, violation="Driveway")
+
+    now = datetime.datetime.now(datetime.UTC)
+    assert result["derived_at"] is not None
+    assert datetime.timedelta(0) <= now - result["derived_at"] < datetime.timedelta(minutes=1)
+    assert result["last_sync_success_at"] == sync_time
+    assert result["most_recent_call_date"] == when
+
+
+def test_write_outputs_stamps_csv_rows_with_all_three_clocks(clean_db, tmp_path):
+    when = datetime.datetime(2026, 6, 1, 12, 0, tzinfo=datetime.UTC)
+    seed_driveway_call(clean_db, 3001, 1, "1 A ST, HALIFAX", when)
+    seed_driveway_call(clean_db, 3002, 2, "1 A ST, HALIFAX",
+                       when - datetime.timedelta(days=1))
+    result = derive.derive(clean_db, violation="Driveway")
+
+    derive._write_outputs(result, "Driveway", tmp_path, 365)
+
+    with open(tmp_path / "watchlist.csv", newline="") as fh:
+        row = next(csv.DictReader(fh))
+    assert row["derived_at"] == result["derived_at"].isoformat()
+    assert row["most_recent_call_date"] == result["most_recent_call_date"].isoformat()
+    assert row["last_sync_success_at"] == "unknown"  # no sync recorded in clean_db
+
+
+def test_write_outputs_stamps_brief_with_a_freshness_note(clean_db, tmp_path):
+    when = datetime.datetime(2026, 6, 1, 12, 0, tzinfo=datetime.UTC)
+    seed_driveway_call(clean_db, 3001, 1, "1 A ST, HALIFAX", when)
+    seed_driveway_call(clean_db, 3002, 2, "1 A ST, HALIFAX",
+                       when - datetime.timedelta(days=1))
+    result = derive.derive(clean_db, violation="Driveway")
+
+    derive._write_outputs(result, "Driveway", tmp_path, 365)
+
+    text = (tmp_path / "watchlist.md").read_text()
+    note_line = next(l for l in text.splitlines() if l.startswith("Derived "))
+    assert "Derived" in note_line
+    assert "last successful sync" in note_line
+    assert "most recent call in the data" in note_line
+
+
+# --------------------------------------------------------- one pass, all types (4.16)
+
+
+def test_derive_all_defaults_to_every_canonical_type(clean_db):
+    results = derive.derive_all(clean_db)
+
+    assert set(results) == set(violation_types.CANONICAL_TYPES)
+
+
+def test_derive_all_no_call_belongs_to_two_types_output(clean_db):
+    """The 4.16 invariant: a call belongs to exactly one type's output. Seeded
+    with two distinct canonical types sharing nothing but the module under test.
+    """
+    when = datetime.datetime(2026, 6, 1, 12, 0, tzinfo=datetime.UTC)
+    seed_driveway_call(clean_db, 3001, 1, "1 A ST, HALIFAX", when)
+    seed_driveway_call(clean_db, 3002, 2, "1 A ST, HALIFAX",
+                       when - datetime.timedelta(days=1))
+    seed_call(clean_db, 3003, 3, "2 B ST, HALIFAX", when, "No Parking Sign")
+    seed_call(clean_db, 3004, 4, "2 B ST, HALIFAX",
+             when - datetime.timedelta(days=1), "No Parking Sign")
+
+    results = derive.derive_all(
+        clean_db, types=["Blocking Driveway", "No Parking Sign"], min_calls=1
+    )
+
+    driveway_ids = {c["REQUEST_ID"] for c in results["Blocking Driveway"]["calls"]}
+    sign_ids = {c["REQUEST_ID"] for c in results["No Parking Sign"]["calls"]}
+    assert driveway_ids == {3001, 3002}
+    assert sign_ids == {3003, 3004}
+    assert driveway_ids.isdisjoint(sign_ids)
+
+    driveway_addresses = {r["address"] for r in results["Blocking Driveway"]["rows"]}
+    sign_addresses = {r["address"] for r in results["No Parking Sign"]["rows"]}
+    assert driveway_addresses.isdisjoint(sign_addresses)
+
+
+def test_derive_all_slice_matches_direct_derive_exactly(clean_db):
+    """The 4.16 ordering/shape requirement: a type's slice of `derive_all()` is
+    exactly what a separate `derive(canonical_type=...)` call on that type alone
+    would have produced -- rows, blocks, calls, fields and latest all equal, in
+    the same order. Only `derived_at` is excluded from the comparison: it is
+    wall-clock time the two calls cannot share (see `derive()`'s docstring).
+    """
+    insert_census_area(clean_db, "12090999", SQUARE_RING, dwellings=80)
+    when = datetime.datetime(2026, 6, 1, 12, 0, tzinfo=datetime.UTC)
+    seed_driveway_call(clean_db, 3001, 1, "1 SAME ST, HALIFAX", when,
+                       lat=0.5, lon=0.5)
+    seed_driveway_call(clean_db, 3002, 2, "1 SAME ST, HALIFAX",
+                       when - datetime.timedelta(days=5), lat=0.5, lon=0.5)
+    seed_call(clean_db, 3003, 3, "2 B ST, HALIFAX", when, "No Parking Sign")
+    seed_call(clean_db, 3004, 4, "2 B ST, HALIFAX",
+             when - datetime.timedelta(days=1), "No Parking Sign")
+
+    all_results = derive.derive_all(
+        clean_db, types=["Blocking Driveway", "No Parking Sign"], min_calls=1
+    )
+    direct = derive.derive(clean_db, canonical_type="Blocking Driveway", min_calls=1)
+
+    from_all = all_results["Blocking Driveway"]
+    from_all.pop("derived_at")
+    direct.pop("derived_at")
+    assert from_all == direct
+
+
+def _count_cursor_calls(conn, fn):
+    original = conn.cursor
+    count = 0
+
+    def counting(*a, **k):
+        nonlocal count
+        count += 1
+        return original(*a, **k)
+
+    conn.cursor = counting
+    try:
+        fn()
+    finally:
+        conn.cursor = original
+    return count
+
+
+def test_derive_all_query_count_is_independent_of_number_of_types(clean_db):
+    """4.16's "one pass" claim, checked rather than trusted: how many `cursor()`
+    opens `derive_all()` needs must not grow with how many canonical types are
+    asked for -- 2 types and 5 types cost exactly the same.
+    """
+    when = datetime.datetime(2026, 6, 1, 12, 0, tzinfo=datetime.UTC)
+    seed_driveway_call(clean_db, 3001, 1, "1 A ST, HALIFAX", when)
+    insert_service_request(clean_db, 2, 3002, "2 B ST, HALIFAX", when)
+    insert_custom_field(clean_db, 20, 3002, "Alleged Violation", "No Parking Sign")
+
+    two_types = ["Blocking Driveway", "No Parking Sign"]
+    five_types = list(violation_types.CANONICAL_TYPES)[:5]
+
+    count_two = _count_cursor_calls(
+        clean_db, lambda: derive.derive_all(clean_db, types=two_types, min_calls=1)
+    )
+    count_five = _count_cursor_calls(
+        clean_db, lambda: derive.derive_all(clean_db, types=five_types, min_calls=1)
+    )
+
+    assert count_two == count_five
 
 
 # ------------------------------------------------------------------------- CLI
@@ -457,3 +852,39 @@ def test_main_rejects_giving_both_selectors(clean_db, tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit):
         derive.main()
+
+
+def test_main_rejects_all_types_with_violation(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["derive.py", str(tmp_path), "--all-types", "--violation", "Driveway"],
+    )
+
+    with pytest.raises(SystemExit):
+        derive.main()
+
+
+def test_main_all_types_writes_one_subdirectory_per_type(clean_db, tmp_path,
+                                                          monkeypatch):
+    when = datetime.datetime(2026, 6, 1, 12, 0, tzinfo=datetime.UTC)
+    seed_driveway_call(clean_db, 3001, 1, "1 A ST, HALIFAX", when)
+    seed_driveway_call(clean_db, 3002, 2, "1 A ST, HALIFAX",
+                       when - datetime.timedelta(days=1))
+    seed_call(clean_db, 3003, 3, "2 B ST, HALIFAX", when, "No Parking Sign")
+    seed_call(clean_db, 3004, 4, "2 B ST, HALIFAX",
+             when - datetime.timedelta(days=1), "No Parking Sign")
+
+    out_dir = tmp_path / "all"
+    monkeypatch.setattr(
+        "sys.argv", ["derive.py", str(out_dir), "--all-types", "--min-calls", "1"]
+    )
+    monkeypatch.setattr(derive.db, "connect", lambda *a, **k: clean_db)
+
+    exit_code = derive.main()
+
+    assert exit_code == 0
+    assert (out_dir / "blocking-driveway" / "watchlist.csv").exists()
+    assert (out_dir / "blocking-driveway" / "watchlist.md").exists()
+    assert (out_dir / "no-parking-sign" / "watchlist.csv").exists()
+    # A type with no seeded calls gets no directory at all, not an empty one.
+    assert not (out_dir / "private-property").exists()

@@ -1319,3 +1319,197 @@ def test_repeated_failure_advances_attempt_but_not_success(mirrored, service,
     assert attempt == NOW + 3 * DAY                # the most recent try
     assert success == success_after_first          # unmoved since the last one that worked
     assert ok is False
+
+
+# ------------------------------------------------------- 8.6 retained list history
+
+
+def snapshot_rows(conn, violation_type="Blocking Driveway"):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, sync_run_id, parameters, mirror_version, latest_call_date "
+            "FROM list_snapshots WHERE violation_type = %s ORDER BY id",
+            (violation_type,))
+        return cur.fetchall()
+
+
+def test_a_quiet_night_takes_no_snapshot_and_costs_no_extra_request(mirrored, service):
+    """design.md M5: the record moves into the store, but a no-op poll changes no
+    row in any layer, so derive.derive() would return exactly what the last
+    snapshot already holds. Snapshotting it anyway would only duplicate rows for a
+    list that could not have moved -- and the request cost (3.5's poll +
+    reconcile) has to stay exactly what it was before this feature existed."""
+    outcome = sync.sync(mirrored, now=NOW, log=lambda m: None)
+
+    assert outcome["pulled"] == []
+    assert outcome["snapshots"] == []
+    assert snapshot_rows(mirrored) == []
+    assert not runs(mirrored, kind="derive")
+    assert len(service.metadata_reads) == 3        # unchanged: one poll per layer
+    assert len(service.count_reads) == 3            # unchanged: one reconcile per layer
+    assert service.pages_served == 0                # unchanged: nothing paged
+
+
+def test_a_reload_retains_the_lists_it_produced(mirrored, service):
+    """The path 8.6 specifies: a sync that actually reloaded a layer retains what
+    derive.derive_all() produced from the fresh mirror -- every canonical type from
+    one pass, each with the parameters and the mirror version it was derived
+    under."""
+    from mirror import violation_types
+
+    service.add("service_requests",
+               request_feature(11, BASE_DATE + datetime.timedelta(hours=30)))
+    service.publish()
+
+    outcome = sync.sync(mirrored, now=NOW, log=lambda m: None)
+
+    assert outcome["pulled"]                       # at least one layer reloaded
+    assert len(outcome["snapshots"]) == len(violation_types.CANONICAL_TYPES)
+    assert {s["violation_type"] for s in outcome["snapshots"]} == \
+        set(violation_types.CANONICAL_TYPES)
+    assert all(s["ok"] for s in outcome["snapshots"])
+
+    by_type = {s["violation_type"]: s for s in outcome["snapshots"]}
+    # every fixture request is tagged DRIVEWAY (-> "Blocking Driveway"), and every
+    # address is called exactly once, below the default min_calls of 2, so even
+    # that type's own list comes back empty
+    snap = by_type["Blocking Driveway"]
+    assert snap == {"violation_type": "Blocking Driveway", "ok": True,
+                    "snapshot_id": snap["snapshot_id"], "doorways": 0, "blocks": 0}
+    # a type with no calls at all is still snapshotted -- an empty list is retained,
+    # not skipped
+    other = by_type["No Parking Sign"]
+    assert other == {"violation_type": "No Parking Sign", "ok": True,
+                     "snapshot_id": other["snapshot_id"], "doorways": 0, "blocks": 0}
+
+    rows = snapshot_rows(mirrored, "Blocking Driveway")
+    assert len(rows) == 1
+    snap_id, run_id, parameters, mirror_version, latest_call_date = rows[0]
+    assert snap_id == snap["snapshot_id"]
+    assert parameters == {"min_calls": 2, "recur_days": 365, "min_doorways": 2,
+                          "district": None}
+    with mirrored.cursor() as cur:
+        cur.execute("SELECT layer, source_last_edit FROM layer_state")
+        held = dict(cur.fetchall())
+    assert mirror_version == {
+        layer: (held[layer].isoformat() if held.get(layer) else None)
+        for layer in ("service_requests", "custom_fields", "census_areas")
+    }
+    derive_run = runs(mirrored, kind="derive", layer="Blocking Driveway")
+    assert len(derive_run) == 1 and derive_run[0][0] == run_id and derive_run[0][3]
+    # every canonical type got its own sync_runs row, not just this one
+    assert len(runs(mirrored, kind="derive")) == len(violation_types.CANONICAL_TYPES)
+
+
+def test_a_derivation_failure_is_recorded_but_does_not_undo_the_reload(
+        mirrored, service, monkeypatch):
+    """8.6: deriving must not make a successful reload look failed, and a
+    derivation failure must not undo it. The reload has already committed
+    (`sync.swap_in`) before `history.snapshot_after_sync` is ever called.
+
+    `derive_all()` is the one call that produces every type's result, so when it
+    itself raises, every requested type failed together -- each still gets its own
+    `sync_runs` row and its own anomaly (the module docstring's "One pass, one row
+    per type")."""
+    from mirror import history, violation_types
+
+    def explode(conn, **kwargs):
+        raise RuntimeError("derivation blew up")
+
+    monkeypatch.setattr(history.derive, "derive_all", explode)
+    service.add("service_requests",
+               request_feature(11, BASE_DATE + datetime.timedelta(hours=30)))
+    service.publish()
+
+    outcome = sync.sync(mirrored, now=NOW, log=lambda m: None)
+
+    reloaded = outcome["layers"]["service_requests"]["reload"]
+    assert reloaded["swapped"] is True and reloaded["reconciled"]
+    assert load.stored_count(mirrored, source.LAYERS["service_requests"]) == 11
+    reload_runs = runs(mirrored, kind="reload", layer="service_requests")
+    assert reload_runs[-1][3] is True               # the reload's own row: still ok
+
+    assert outcome["snapshots"] == [
+        {"violation_type": t, "ok": False, "error": "derivation blew up"}
+        for t in violation_types.CANONICAL_TYPES
+    ]
+    derive_runs = runs(mirrored, kind="derive", layer="Blocking Driveway")
+    assert len(derive_runs) == 1 and derive_runs[0][3] is False
+    assert derive_runs[0][8] == "derivation blew up"
+    assert len(runs(mirrored, kind="derive")) == len(violation_types.CANONICAL_TYPES)
+    assert all(r[3] is False for r in runs(mirrored, kind="derive"))
+    assert snapshot_rows(mirrored) == []             # nothing partial was retained
+    found = anomalies(mirrored, "list_snapshot_failed")
+    assert len(found) == len(violation_types.CANONICAL_TYPES)
+    assert {f[0] for f in found} == set(violation_types.CANONICAL_TYPES)
+
+
+def test_a_reload_snapshots_every_requested_type_from_one_derive_all_call(
+        mirrored, monkeypatch):
+    """4.16's one-pass derivation is the point of switching to `derive_all()`
+    here: however many canonical types are requested, the mirror is read once, not
+    once per type. Called directly (not through `sync.sync()`) with an explicit,
+    small `types` so the call count is easy to pin down."""
+    from mirror import history
+
+    calls = []
+    real_derive_all = history.derive.derive_all
+
+    def counting_derive_all(conn, **kwargs):
+        calls.append(kwargs.get("types"))
+        return real_derive_all(conn, **kwargs)
+
+    monkeypatch.setattr(history.derive, "derive_all", counting_derive_all)
+
+    types = ("Blocking Driveway", "No Parking Sign", "Private Property")
+    outcomes = history.snapshot_after_sync(
+        mirrored, {"pulled": ["service_requests"]}, now=NOW, types=types,
+        log=lambda m: None)
+
+    assert len(calls) == 1                          # one derive_all call, not three
+    assert calls[0] == list(types)
+    assert [o["violation_type"] for o in outcomes] == list(types)
+    assert all(o["ok"] for o in outcomes)
+    assert len({o["snapshot_id"] for o in outcomes}) == 3   # three distinct snapshots
+    assert {r[2] for r in runs(mirrored, kind="derive")} == set(types)
+
+
+def test_one_types_failing_snapshot_insert_does_not_block_the_others(
+        mirrored, monkeypatch):
+    """A `derive_all()` failure takes every type down together (the test above
+    this section), but a failure *after* `derive_all()` has already returned --
+    one type's `snapshot()` insert going bad -- must not: the other types' rows
+    already exist and stand."""
+    from mirror import history
+
+    real_snapshot = history.snapshot
+
+    def flaky_snapshot(conn, run_id, violation_type, result, **kwargs):
+        if violation_type == "No Parking Sign":
+            raise RuntimeError("insert blew up")
+        return real_snapshot(conn, run_id, violation_type, result, **kwargs)
+
+    monkeypatch.setattr(history, "snapshot", flaky_snapshot)
+
+    types = ("Blocking Driveway", "No Parking Sign", "Private Property")
+    outcomes = history.snapshot_after_sync(
+        mirrored, {"pulled": ["service_requests"]}, now=NOW, types=types,
+        log=lambda m: None)
+
+    by_type = {o["violation_type"]: o for o in outcomes}
+    assert by_type["Blocking Driveway"]["ok"] is True
+    assert by_type["Private Property"]["ok"] is True
+    assert by_type["No Parking Sign"] == {
+        "violation_type": "No Parking Sign", "ok": False, "error": "insert blew up"}
+
+    assert snapshot_rows(mirrored, "Blocking Driveway") != []
+    assert snapshot_rows(mirrored, "Private Property") != []
+    assert snapshot_rows(mirrored, "No Parking Sign") == []
+
+    found = anomalies(mirrored, "list_snapshot_failed")
+    assert len(found) == 1 and found[0][0] == "No Parking Sign"
+
+    derive_runs = {r[2]: r for r in runs(mirrored, kind="derive")}
+    assert derive_runs["No Parking Sign"][3] is False
+    assert derive_runs["Blocking Driveway"][3] is True
+    assert derive_runs["Private Property"][3] is True

@@ -76,13 +76,13 @@ New, replacing the retired mechanism:
 
 - [x] 4.1 Read selection, joining, outcome and vehicle attachment, address reduction, doorway location and census placement from the mirror, and verify no network request is issued during a derivation
 - [x] 4.4 Move retry and paging out of the derivation into the mirror, and verify the census layer is read locally like every other layer, closing the retry asymmetry recorded as D14a — done with 4.1, in the new mirror derivation rather than in `src/hotspots.py`, which stays stdlib-only and live as the baseline 4.9 reconciles against **[was 12.1]**
-- [ ] 4.2 Remove the live-fallback path entirely, and verify a record absent from the mirror is reported as absent rather than fetched from the source
-- [ ] 4.3 Report a derivation running against an unreconciled mirror as such, and verify the derivation does not top up missing rows itself
-- [ ] 4.5 Preserve census containment correctness including interior holes, and verify agreement with the authoritative spatial answer on the same six addresses the original implementation was verified against
+- [x] 4.2 Remove the live-fallback path entirely, and verify a record absent from the mirror is reported as absent rather than fetched from the source
+- [x] 4.3 Report a derivation running against an unreconciled mirror as such, and verify the derivation does not top up missing rows itself
+- [x] 4.5 Preserve census containment correctness including interior holes, and verify agreement with the authoritative spatial answer on the same six addresses the original implementation was verified against
 - [x] 4.6 Replace the fixed `-3` offset at `src/hotspots.py:37` with daylight-saving-aware conversion per timestamp, and verify two calls at the same local clock time in July and in January report the same local time — across a 2020–2026 range every record outside daylight saving is currently an hour out **[was 8.1]**
 - [x] 4.6a Confirm the corrected conversion does not shift any doorway across the recency boundary, and verify by diffing the doorway list before and after. Calendar-date fields are expected to move where a timestamp lies within an hour of local midnight outside daylight saving — that is the correction, not a regression. Observed on 2026-09-16: membership and order unchanged (352 doorways), block list byte-identical, one `last_call` moved a day and 21 `median_gap_days` moved by half a day or a day **[was 8.3]**
-- [ ] 4.7 Carry the derivation time, last successful sync time and most recent call date onto every output, and verify all three appear together **[was 9.1]**
-- [ ] 4.8 Add automated coverage for the pure functions — address reduction, street extraction, point-in-polygon including interior holes, vehicle identity, recurrence counting — and verify the suite passes without network access **[was 12.4]**
+- [x] 4.7 Carry the derivation time, last successful sync time and most recent call date onto every output, and verify all three appear together **[was 9.1]**
+- [x] 4.8 Add automated coverage for the pure functions — address reduction, street extraction, point-in-polygon including interior holes, vehicle identity, recurrence counting — and verify the suite passes without network access **[was 12.4]**
 - [ ] 4.9 **Reconcile at figure level.** Run `src/hotspots.py` against the live service and the new derivation against the mirror for `Driveway`, and verify every row and figure in `out/watchlist.csv`, `out/blocks.csv` and both briefs matches — any discrepancy is a mirror or derivation defect, not a revision of the analysis. The cheap route is to point `query()` at the mirror and diff the outputs
 
 ### 4b. Compute the figures the documentation rests on
@@ -90,16 +90,16 @@ New, replacing the retired mechanism:
 Carried from the archived change, and a prerequisite for 8.1: two figures central to the product's
 claim exist only in hand-written prose and are reproduced by no generated output.
 
-- [ ] 4.10 Compute recurrence split by tow status and emit it, and verify the generated output reproduces the 44.7 per cent against 44.6 per cent comparison quoted in `README.md` **[was 11.1]**
+- [x] 4.10 Compute recurrence split by tow status and emit it, and verify the generated output reproduces the 44.7 per cent against 44.6 per cent comparison quoted in `README.md` **[was 11.1]**
 - [ ] 4.11 Report the effect size the comparison can rule out, and verify the output states a bound rather than only an absence of difference **[was 11.2]**
 - [ ] 4.12 State that the tow comparison is observational and that tows may cluster at the worst addresses, and verify the caveat travels with the figures **[was 11.3]**
-- [ ] 4.13 Compute median elapsed time from `DATE_INITIATED` to `DATE_CLOSED`, excluding and separately counting calls never closed, and verify the output reproduces the response-time figure opening `README.md` **[was 11.4]**
+- [x] 4.13 Compute median elapsed time from `DATE_INITIATED` to `DATE_CLOSED`, excluding and separately counting calls never closed, and verify the output reproduces the response-time figure opening `README.md` **[was 11.4]**
 - [ ] 4.14 Reconcile the call denominators in circulation — the DISPATCH label alone, the label plus `DRIVEWAY`, and the tow-comparison cohort — and verify each published figure names which population it is drawn from **[was 11.5]**
 
 ### 4c. Every canonical violation type
 
 - [x] 4.15 Freeze the canonical violation-type list against a fresh live query of `Alleged Violation`, grouping each current label with its legacy short code and `(DISPATCH)` variant, excluding `Other` (7,542) and `Left Running`, and verify the frozen list accounts for the great majority of non-excluded rows — 71 distinct raw labels and 110,900 calls were observed on 2026-09-15 **[was 14.1]**
-- [ ] 4.16 Derive every tracked canonical type from one pass over the mirror, and verify no source query is issued and no doorway or block from one type appears in another's output **[was 14.2]**
+- [x] 4.16 Derive every tracked canonical type from one pass over the mirror, and verify no source query is issued and no doorway or block from one type appears in another's output **[was 14.2]**
 - [ ] 4.17 Compute recurrence, the tow comparison and vehicle uniqueness independently per canonical type, and verify a type whose figures do not resemble driveway's states its own conclusion rather than driveway's **[was 14.5]**
 - [ ] 4.18 Check `No Parking Sign` — 27,404 calls, the largest type — against the string-reduction concern in R2, and verify whether address collisions at that volume require coordinate keying ahead of the other types **[was 14.6]**
 - [ ] 4.19 Measure the all-types derivation time against the mirror, and verify it is bounded by computation rather than by network
@@ -156,7 +156,7 @@ first, or the figures 8.1 needs still will not exist.
 - [ ] 8.3 Qualify `README.md`'s "No keys and no install" to the viewer rather than the system, and verify it does not imply the server has no dependencies
 - [ ] 8.4 Replace `README.md`'s "Open the board" instructions to double-click `out/triage-board.html` with the URL and the export path, and verify a reader is not directed to a file that is no longer the product
 - [ ] 8.5 Record in `docs/parking-hotspots/decisions.md` the decisions this change makes — mirror, source-paced sync, served application, shared triage, role selection, and the removal of this repository's scheduled job — with their reasons, and verify the narrative record matches these specs
-- [ ] 8.6 Retain the doorway and block lists per sync in the store, and verify the record of which doorway left the list and when survives the removal of the scheduled job that was building it by accident in git history
+- [x] 8.6 Retain the doorway and block lists per sync in the store, and verify the record of which doorway left the list and when survives the removal of the scheduled job that was building it by accident in git history
 - [ ] 8.7 Stop generating committed output to `out/`, and verify the exports in 7.7 are the only way a list leaves the application
 - [x] 8.8 Correct the unsourced "weekly-refreshed source" claim wherever it is repeated, and verify no document states a source refresh interval that nothing measured supports
 
