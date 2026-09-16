@@ -83,7 +83,7 @@ New, replacing the retired mechanism:
 - [x] 4.6a Confirm the corrected conversion does not shift any doorway across the recency boundary, and verify by diffing the doorway list before and after. Calendar-date fields are expected to move where a timestamp lies within an hour of local midnight outside daylight saving — that is the correction, not a regression. Observed on 2026-09-16: membership and order unchanged (352 doorways), block list byte-identical, one `last_call` moved a day and 21 `median_gap_days` moved by half a day or a day **[was 8.3]**
 - [x] 4.7 Carry the derivation time, last successful sync time and most recent call date onto every output, and verify all three appear together **[was 9.1]**
 - [x] 4.8 Add automated coverage for the pure functions — address reduction, street extraction, point-in-polygon including interior holes, vehicle identity, recurrence counting — and verify the suite passes without network access **[was 12.4]**
-- [ ] 4.9 **Reconcile at figure level.** Run `src/hotspots.py` against the live service and the new derivation against the mirror for `Driveway`, and verify every row and figure in `out/watchlist.csv`, `out/blocks.csv` and both briefs matches — any discrepancy is a mirror or derivation defect, not a revision of the analysis. The cheap route is to point `query()` at the mirror and diff the outputs
+- [x] 4.9 **Reconcile at figure level.** Run `src/hotspots.py` against the live service and the new derivation against the mirror for `Driveway`, and verify every row and figure in `out/watchlist.csv`, `out/blocks.csv` and both briefs matches — any discrepancy is a mirror or derivation defect, not a revision of the analysis. The cheap route is to point `query()` at the mirror and diff the outputs
 
 ### 4b. Compute the figures the documentation rests on
 
@@ -91,18 +91,18 @@ Carried from the archived change, and a prerequisite for 8.1: two figures centra
 claim exist only in hand-written prose and are reproduced by no generated output.
 
 - [x] 4.10 Compute recurrence split by tow status and emit it, and verify the generated output reproduces the 44.7 per cent against 44.6 per cent comparison quoted in `README.md` **[was 11.1]**
-- [ ] 4.11 Report the effect size the comparison can rule out, and verify the output states a bound rather than only an absence of difference **[was 11.2]**
-- [ ] 4.12 State that the tow comparison is observational and that tows may cluster at the worst addresses, and verify the caveat travels with the figures **[was 11.3]**
+- [x] 4.11 Report the effect size the comparison can rule out, and verify the output states a bound rather than only an absence of difference **[was 11.2]**
+- [x] 4.12 State that the tow comparison is observational and that tows may cluster at the worst addresses, and verify the caveat travels with the figures **[was 11.3]**
 - [x] 4.13 Compute median elapsed time from `DATE_INITIATED` to `DATE_CLOSED`, excluding and separately counting calls never closed, and verify the output reproduces the response-time figure opening `README.md` **[was 11.4]**
-- [ ] 4.14 Reconcile the call denominators in circulation — the DISPATCH label alone, the label plus `DRIVEWAY`, and the tow-comparison cohort — and verify each published figure names which population it is drawn from **[was 11.5]**
+- [x] 4.14 Reconcile the call denominators in circulation — the DISPATCH label alone, the label plus `DRIVEWAY`, and the tow-comparison cohort — and verify each published figure names which population it is drawn from **[was 11.5]**
 
 ### 4c. Every canonical violation type
 
 - [x] 4.15 Freeze the canonical violation-type list against a fresh live query of `Alleged Violation`, grouping each current label with its legacy short code and `(DISPATCH)` variant, excluding `Other` (7,542) and `Left Running`, and verify the frozen list accounts for the great majority of non-excluded rows — 71 distinct raw labels and 110,900 calls were observed on 2026-09-15 **[was 14.1]**
 - [x] 4.16 Derive every tracked canonical type from one pass over the mirror, and verify no source query is issued and no doorway or block from one type appears in another's output **[was 14.2]**
-- [ ] 4.17 Compute recurrence, the tow comparison and vehicle uniqueness independently per canonical type, and verify a type whose figures do not resemble driveway's states its own conclusion rather than driveway's **[was 14.5]**
-- [ ] 4.18 Check `No Parking Sign` — 27,404 calls, the largest type — against the string-reduction concern in R2, and verify whether address collisions at that volume require coordinate keying ahead of the other types **[was 14.6]**
-- [ ] 4.19 Measure the all-types derivation time against the mirror, and verify it is bounded by computation rather than by network
+- [x] 4.17 Compute recurrence, the tow comparison and vehicle uniqueness independently per canonical type, and verify a type whose figures do not resemble driveway's states its own conclusion rather than driveway's **[was 14.5]**
+- [x] 4.18 Check `No Parking Sign` — 27,404 calls, the largest type — against the string-reduction concern in R2, and verify whether address collisions at that volume require coordinate keying ahead of the other types **[was 14.6]**
+- [x] 4.19 Measure the all-types derivation time against the mirror, and verify it is bounded by computation rather than by network
 
 ## 5. Serve the application
 
