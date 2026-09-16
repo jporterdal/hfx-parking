@@ -1,0 +1,58 @@
+{
+ "features": [
+  {
+   "attributes": {
+    "REQUESTID": 2031577,
+    "CUSTOM_FIELD_ID": 60045,
+    "CUSTOM_FIELD_NAME": "Outcome",
+    "CUSTOM_FIELD_VALUE": null,
+    "ObjectId": 1
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2031577,
+    "CUSTOM_FIELD_ID": 60046,
+    "CUSTOM_FIELD_NAME": "Quality Checked",
+    "CUSTOM_FIELD_VALUE": null,
+    "ObjectId": 2
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2031585,
+    "CUSTOM_FIELD_ID": 60194,
+    "CUSTOM_FIELD_NAME": "Type of Litter/Issue",
+    "CUSTOM_FIELD_VALUE": "Other",
+    "ObjectId": 3
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2031604,
+    "CUSTOM_FIELD_ID": 60022,
+    "CUSTOM_FIELD_NAME": "Snow Route ",
+    "CUSTOM_FIELD_VALUE": null,
+    "ObjectId": 4
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2031604,
+    "CUSTOM_FIELD_ID": 60023,
+    "CUSTOM_FIELD_NAME": "Sidewalk Route",
+    "CUSTOM_FIELD_VALUE": "SWZ6",
+    "ObjectId": 5
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2031604,
+    "CUSTOM_FIELD_ID": 60038,
+    "CUSTOM_FIELD_NAME": "Dispatch Confirmation ",
+    "CUSTOM_FIELD_VALUE": "Confirmation not required",
+    "ObjectId": 6
+   }
+  }
+ ]
+}

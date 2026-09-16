@@ -14,54 +14,73 @@ than continued. Tasks carried over from it are marked **[was N.n]** against thei
 
 ## 1. Stand up the mirror
 
-- [ ] 1.1 Remove `.github/workflows/nightly.yml` first, and verify no scheduled job commits to `out/` while the rest of this change is in progress — left running, the bot churns the very files section 8 is trying to pin down
-- [ ] 1.2 Fix the mirror's scope before designing for it: service requests, custom fields and census dissemination areas, each **in full**, and verify `311_Call_Details` is not mirrored — at 4,968,536 rows and ~1.2 GB it is three times everything else combined, and `design.md` M10 records why it buys nothing
-- [ ] 1.3 Store the custom-fields layer key-value as published — 1,156,710 rows across 88 distinct `CUSTOM_FIELD_NAME` values — rather than pivoted on ingest, and verify the stored shape matches the source layer so its count can be checked against the service's own
-- [ ] 1.4 Derive a per-call view over the seven parking attributes (`Alleged Violation`, `Property Ownership`, `Vehicle Was Towed`, `Vehicle Make`, `Vehicle Model`, `Vehicle Colour`, `Vehicle Province`), and verify it yields one row per request for the 110,900 calls carrying an alleged violation — a pivot cannot be the stored form, because 88 field names do not fit seven columns
-- [ ] 1.5 Define the schema for requests, custom fields, census areas, sync history, retained list history and triage decisions, and verify each downstream section's reads are supported without a later migration
-- [ ] 1.6 Stand up a `pytest` harness with a dependency manifest, a `tests/` tree and a runnable entry point, and verify `pytest` passes from a clean checkout — every "verify" in this file is a manual inspection until this exists, and the reconciliations in 3.6 and 4.9 need to be re-runnable rather than performed once **[was 12.4, partial]**
-- [ ] 1.6a Make the suite runnable with no network access, and verify it passes with outbound requests blocked — fixtures stand in for the source, so a source outage and a code regression stop looking alike
-- [ ] 1.6b Record that the project now has a dependency manifest where it previously had none, and verify `README.md`'s "No keys and no install" is not left describing the server (see 8.3) — the stdlib-only constraint was a hackathon property of the viewer's experience, and it survives for the viewer only
-- [ ] 1.7 Load each layer by offset paging to exhaustion, and verify stored row counts match the service's own count-only query per layer — 478,458 requests and 1,156,710 custom-field rows at time of writing
-- [ ] 1.8 Make the initial load resumable at page granularity, and verify a load interrupted partway continues from the last completed page rather than restarting
-- [ ] 1.9 **Report observed on-disk size per mirrored layer** in the implementation findings, and verify the figures against the ~300–400 MB total estimate rather than restating the estimate
-- [ ] 1.10 Measure the full load's wall-clock time and request count, and verify it is within the order predicted — roughly 1,250 pages at about 0.52s each
+- [x] 1.1 Remove `.github/workflows/nightly.yml` first, and verify no scheduled job commits to `out/` while the rest of this change is in progress — left running, the bot churns the very files section 8 is trying to pin down
+- [x] 1.2 Fix the mirror's scope before designing for it: service requests, custom fields and census dissemination areas, each **in full**, and verify `311_Call_Details` is not mirrored — at 4,968,536 rows and ~1.2 GB it is three times everything else combined, and `design.md` M10 records why it buys nothing
+- [x] 1.3 Store the custom-fields layer key-value as published — 1,156,710 rows across 88 distinct `CUSTOM_FIELD_NAME` values — rather than pivoted on ingest, and verify the stored shape matches the source layer so its count can be checked against the service's own
+- [x] 1.4 Derive a per-call view over the seven parking attributes (`Alleged Violation`, `Property Ownership`, `Vehicle Was Towed`, `Vehicle Make`, `Vehicle Model`, `Vehicle Colour`, `Vehicle Province`), and verify it yields one row per request for the 110,900 calls carrying an alleged violation — a pivot cannot be the stored form, because 88 field names do not fit seven columns
+- [x] 1.5 Define the schema for requests, custom fields, census areas, sync history, retained list history and triage decisions, and verify each downstream section's reads are supported without a later migration
+- [x] 1.6 Stand up a `pytest` harness with a dependency manifest, a `tests/` tree and a runnable entry point, and verify `pytest` passes from a clean checkout — every "verify" in this file is a manual inspection until this exists, and the reconciliations in 3.6 and 4.9 need to be re-runnable rather than performed once **[was 12.4, partial]**
+- [x] 1.6a Make the suite runnable with no network access, and verify it passes with outbound requests blocked — fixtures stand in for the source, so a source outage and a code regression stop looking alike
+- [x] 1.6b Record that the project now has a dependency manifest where it previously had none, and verify `README.md`'s "No keys and no install" is not left describing the server (see 8.3) — the stdlib-only constraint was a hackathon property of the viewer's experience, and it survives for the viewer only
+- [x] 1.7 Load each layer by offset paging to exhaustion, and verify stored row counts match the service's own count-only query per layer — 478,458 requests and 1,156,710 custom-field rows at time of writing
+- [x] 1.8 Make the initial load resumable at page granularity, and verify a load interrupted partway continues from the last completed page rather than restarting
+- [x] 1.9 **Report observed on-disk size per mirrored layer** in the implementation findings, and verify the figures against the ~300–400 MB total estimate rather than restating the estimate
+- [x] 1.10 Measure the full load's wall-clock time and request count — observed 1,640 pages, 1,643 requests, 25m10s, 375.5 MB on disk. The 1,250-page/0.52s prediction was sized against the parking slice only; the full custom-fields layer is 1,157 pages on its own
 
-## 2. Sync incrementally
+## 2. Sync by replacing the published version
 
-- [ ] 2.1 Advance a per-layer `ObjectId` watermark, retrieving rows above the mark, and verify a sync after new rows arrive stores them and moves the watermark to the highest identifier retrieved
-- [ ] 2.2 Verify the monotonicity assumption at sync time on the requests layer, and verify a row arriving above the watermark with an initiation date older than rows already held is reported as an anomaly
-- [ ] 2.2a Check monotonicity on the custom-fields layer through its request's date rather than its own, and verify the check is implemented — that layer carries `REQUESTID`, `CUSTOM_FIELD_ID`, `CUSTOM_FIELD_NAME`, `CUSTOM_FIELD_VALUE` and `ObjectId` and **no date field at all**, so the requests-layer check does not transfer
-- [ ] 2.3 Refetch in full every request the mirror holds as open, together with its custom-field rows, and verify a request closed at the source since the last sync has its closure date, status and resolution updated — updated in place, not appended
-- [ ] 2.3a Measure the open-set refetch rather than assuming it, and verify the cost of both halves: the requests side is ~4 pages for 3,351 open requests, while the custom-fields side is ~23,000 rows fetched by `REQUESTID IN (...)`, which is the slow query pattern at roughly six seconds per chunk
-- [ ] 2.4 Verify a tow flag set at the source after filing is reflected for a request held as open — it is the only published enforcement outcome, so a watermark-only append would under-count tows and bias the project's central finding in the direction that flatters it
-- [ ] 2.5 Handle a no-op sync, and verify a sync finding nothing new is recorded as successful with the watermark unchanged and no error raised
-- [ ] 2.6 Poll each layer's `editingInfo.lastEditDate` nightly and pull only when it advances, and verify a poll against an unchanged source performs no pull and is recorded as successful
-- [ ] 2.6a Keep the poll cadence and the pull cadence separate, and verify a week in which the source publishes once produces seven polls and one pull
-- [ ] 2.6b Record the observed source last-edit timestamp with every sync so the cadence accumulates as measurement, and verify the interval history is queryable — no published HRM refresh schedule was found, and the repository's one "weekly-refreshed" claim is unsourced
-- [ ] 2.6c Skip re-pulling static reference layers, and verify the census layer — unedited since 2024-03-19 — is not re-pulled merely because a schedule fired
-- [ ] 2.6d Keep the watermark pull and open-set refetch running on their own schedule independent of the poll, and verify rows changed without `lastEditDate` advancing are still captured
-- [ ] 2.6e Verify the sync runs unattended with no credentials
-- [ ] 2.7 Implement full reload as a supported operation, and verify a reload after an induced divergence restores agreement with the service's counts
+**This section was implemented against an incremental design and then reversed.** `design.md` M2
+records why: the layers are published snapshots, not append logs — `hasStaticData` is true, the
+service offers only `Query` and `Extract`, and `ObjectId` is a dense 1-to-N row counter reassigned
+at each publish. A watermark cannot be made correct against a source whose identifiers carry no
+meaning across versions. `design.md` M2a keeps the question open for later evidence.
+
+Tasks marked **[retired]** were completed and are being removed from scope. They are not failures
+and they are not pending; the method they implemented no longer exists. Their tests come out with
+them.
+
+- [retired] 2.1 Advance a per-layer `ObjectId` watermark — superseded by reload-on-publish
+- [retired] 2.2 Verify monotonicity on the requests layer — the assumption it guarded is gone
+- [retired] 2.2a Check monotonicity on custom fields through its request's date — same
+- [retired] 2.3 Refetch the open request set — subsumed: a full reload retrieves current state for every row
+- [retired] 2.3a Measure both halves of the open-set refetch — measured (requests 3,351 rows / 5.7s; custom fields 1,588 rows / 36.1s), retained in M2 as evidence, mechanism removed
+- [retired] 2.4 Verify a tow flag set after filing is reflected — a reload reflects it without a special path
+- [x] 2.5 Handle a no-op sync, and verify a sync finding nothing new is recorded as successful with no error raised
+- [x] 2.6 Poll each layer's `editingInfo.lastEditDate` nightly and pull only when it advances, and verify a poll against an unchanged source performs no pull and is recorded as successful
+- [x] 2.6a Keep the poll cadence and the pull cadence separate, and verify a week in which the source publishes once produces seven polls and one pull
+- [x] 2.6b Record the observed source last-edit timestamp with every sync so the cadence accumulates as measurement, and verify the interval history is queryable
+- [x] 2.6c Skip re-pulling static reference layers, and verify the census layer is not re-pulled merely because a schedule fired
+- [retired] 2.6d Keep the watermark pull and open-set refetch on their own schedule independent of the poll — there is no pull independent of the version clock any more
+- [x] 2.6e Verify the sync runs unattended with no credentials
+- [x] 2.7 Implement full reload as a supported operation, and verify a reload after an induced divergence restores agreement with the service's counts
+
+New, replacing the retired mechanism:
+
+- [x] 2.8 Make full reload the path taken when a layer's published version advances, and verify a poll finding an advanced `lastEditDate` triggers a reload whose stored count reconciles against the service's own count
+- [x] 2.9 Replace a layer's contents atomically so a reload cannot leave the mirror part-old and part-new, and verify a reload interrupted midway leaves the previous version intact and queryable rather than a mixture
+- [x] 2.10 Remove the watermark pull, both monotonicity checks, the open-set refetch and the `identifier_reassigned` check together with their tests, and verify nothing reachable still reads `layer_state.watermark` as a sync input
+- [x] 2.11 Retain each replaced version's identity before it is overwritten — published edit timestamp, row count, highest identifier, and a sample of `REQUEST_ID` to `ObjectId` mappings large enough to detect renumbering — and verify the retained sample is queryable after the reload that replaced it
+- [x] 2.12 Verify renumbering is detectable across two retained versions, by checking whether a given `REQUEST_ID` kept its `ObjectId`, and verify the check reports an answer rather than an error when only one version has been retained
+- [x] 2.13 Record in `design.md` M2a when the watermark question should next be examined — at least four observed publishes, roughly a month at the current cadence — and verify the retained data is sufficient to answer it without re-instrumenting
 
 ## 3. Make staleness impossible to miss, and prove the mirror faithful at row level
 
-- [ ] 3.1 Record every sync attempt with its start, outcome, watermark reached, per-layer rows inserted and updated, observed source last-edit timestamp, and error on failure, and verify a failed sync appears as a row rather than as an absence
-- [ ] 3.2 Expose last attempt and last success separately, and verify a sync failing repeatedly reports a recent attempt and an unchanged last-success time
-- [ ] 3.3 Expose four clocks separately — source last-edit, most recent call date, last successful sync, next sync due — and verify each is distinguishable from the others, including the case where syncs succeed while the source stops advancing
-- [ ] 3.4 Report whether the mirror is behind the source, and verify the case where HRM has published more recently than the last successful sync is distinguished from the case where HRM simply has not published
-- [ ] 3.5 Compare per-layer stored counts against the service's count query on every sync, and verify a divergence is reported with both figures rather than silently resolved
-- [ ] 3.6 **Reconcile at row level before anything depends on the mirror.** Verify the mirror's `Driveway` call set and its custom-field rows are identical to the service's for the same selection — same request ids, same field values, same counts. This is provable with the mirror alone; figure-level reconciliation is 4.9, because it needs a derivation to exist
+- [x] 3.1 Record every sync attempt with its start, outcome, watermark reached, per-layer rows inserted and updated, observed source last-edit timestamp, and error on failure, and verify a failed sync appears as a row rather than as an absence
+- [x] 3.2 Expose last attempt and last success separately, and verify a sync failing repeatedly reports a recent attempt and an unchanged last-success time
+- [x] 3.3 Expose four clocks separately — source last-edit, most recent call date, last successful sync, next sync due — and verify each is distinguishable from the others, including the case where syncs succeed while the source stops advancing
+- [x] 3.4 Report whether the mirror is behind the source, and verify the case where HRM has published more recently than the last successful sync is distinguished from the case where HRM simply has not published
+- [x] 3.5 Compare per-layer stored counts against the service's count query on every sync, and verify a divergence is reported with both figures rather than silently resolved
+- [x] 3.6 **Reconcile at row level before anything depends on the mirror.** Verify the mirror's `Driveway` call set and its custom-field rows are identical to the service's for the same selection — same request ids, same field values, same counts. This is provable with the mirror alone; figure-level reconciliation is 4.9, because it needs a derivation to exist
 
 ## 4. Move the derivation onto the mirror
 
 - [ ] 4.1 Read selection, joining, outcome and vehicle attachment, address reduction, doorway location and census placement from the mirror, and verify no network request is issued during a derivation
+- [ ] 4.4 Move retry and paging out of the derivation into the mirror, and verify the census layer is read locally like every other layer, closing the retry asymmetry recorded as D14a — done with 4.1, in the new mirror derivation rather than in `src/hotspots.py`, which stays stdlib-only and live as the baseline 4.9 reconciles against **[was 12.1]**
 - [ ] 4.2 Remove the live-fallback path entirely, and verify a record absent from the mirror is reported as absent rather than fetched from the source
 - [ ] 4.3 Report a derivation running against an unreconciled mirror as such, and verify the derivation does not top up missing rows itself
-- [ ] 4.4 Move retry and paging out of the derivation into the mirror, and verify the census layer is read locally like every other layer, closing the retry asymmetry recorded as D14a **[was 12.1]**
 - [ ] 4.5 Preserve census containment correctness including interior holes, and verify agreement with the authoritative spatial answer on the same six addresses the original implementation was verified against
-- [ ] 4.6 Replace the fixed `-3` offset at `src/hotspots.py:37` with daylight-saving-aware conversion per timestamp, and verify two calls at the same local clock time in July and in January report the same local time — across a 2020–2026 range every record outside daylight saving is currently an hour out **[was 8.1]**
-- [ ] 4.6a Confirm the corrected conversion does not shift any doorway across the recency boundary or change `last_call` dates, and verify by diffing the doorway list before and after **[was 8.3]**
+- [x] 4.6 Replace the fixed `-3` offset at `src/hotspots.py:37` with daylight-saving-aware conversion per timestamp, and verify two calls at the same local clock time in July and in January report the same local time — across a 2020–2026 range every record outside daylight saving is currently an hour out **[was 8.1]**
+- [x] 4.6a Confirm the corrected conversion does not shift any doorway across the recency boundary, and verify by diffing the doorway list before and after. Calendar-date fields are expected to move where a timestamp lies within an hour of local midnight outside daylight saving — that is the correction, not a regression. Observed on 2026-09-16: membership and order unchanged (352 doorways), block list byte-identical, one `last_call` moved a day and 21 `median_gap_days` moved by half a day or a day **[was 8.3]**
 - [ ] 4.7 Carry the derivation time, last successful sync time and most recent call date onto every output, and verify all three appear together **[was 9.1]**
 - [ ] 4.8 Add automated coverage for the pure functions — address reduction, street extraction, point-in-polygon including interior holes, vehicle identity, recurrence counting — and verify the suite passes without network access **[was 12.4]**
 - [ ] 4.9 **Reconcile at figure level.** Run `src/hotspots.py` against the live service and the new derivation against the mirror for `Driveway`, and verify every row and figure in `out/watchlist.csv`, `out/blocks.csv` and both briefs matches — any discrepancy is a mirror or derivation defect, not a revision of the analysis. The cheap route is to point `query()` at the mirror and diff the outputs
@@ -79,7 +98,7 @@ claim exist only in hand-written prose and are reproduced by no generated output
 
 ### 4c. Every canonical violation type
 
-- [ ] 4.15 Freeze the canonical violation-type list against a fresh live query of `Alleged Violation`, grouping each current label with its legacy short code and `(DISPATCH)` variant, excluding `Other` (7,542) and `Left Running`, and verify the frozen list accounts for the great majority of non-excluded rows — 71 distinct raw labels and 110,900 calls were observed on 2026-09-15 **[was 14.1]**
+- [x] 4.15 Freeze the canonical violation-type list against a fresh live query of `Alleged Violation`, grouping each current label with its legacy short code and `(DISPATCH)` variant, excluding `Other` (7,542) and `Left Running`, and verify the frozen list accounts for the great majority of non-excluded rows — 71 distinct raw labels and 110,900 calls were observed on 2026-09-15 **[was 14.1]**
 - [ ] 4.16 Derive every tracked canonical type from one pass over the mirror, and verify no source query is issued and no doorway or block from one type appears in another's output **[was 14.2]**
 - [ ] 4.17 Compute recurrence, the tow comparison and vehicle uniqueness independently per canonical type, and verify a type whose figures do not resemble driveway's states its own conclusion rather than driveway's **[was 14.5]**
 - [ ] 4.18 Check `No Parking Sign` — 27,404 calls, the largest type — against the string-reduction concern in R2, and verify whether address collisions at that volume require coordinate keying ahead of the other types **[was 14.6]**
@@ -132,14 +151,14 @@ drifted within days. A public URL turns that into a credibility problem. Section
 first, or the figures 8.1 needs still will not exist.
 
 - [ ] 8.1 Replace every hand-written figure in `README.md` and `docs/parking-hotspots/` with the current generated value, and verify each published number is reproduced by output the reader can regenerate **[was 13.1]**
-- [ ] 8.1a Re-derive the hour-of-day and channel figures in `docs/` under the corrected timezone conversion, and verify the published numbers match the corrected output or are updated to it **[was 8.2]**
+- [x] 8.1a Re-derive the hour-of-day and channel figures in `docs/` under the corrected timezone conversion, and verify the published numbers match the corrected output or are updated to it **[was 8.2]**
 - [ ] 8.2 Correct `README.md`'s hosted-copy claim — "The hosted copy shares those decisions with everyone who opens it, so a team triages one list instead of three" — to describe the served application, and verify it no longer describes a Claude Artifact
 - [ ] 8.3 Qualify `README.md`'s "No keys and no install" to the viewer rather than the system, and verify it does not imply the server has no dependencies
 - [ ] 8.4 Replace `README.md`'s "Open the board" instructions to double-click `out/triage-board.html` with the URL and the export path, and verify a reader is not directed to a file that is no longer the product
 - [ ] 8.5 Record in `docs/parking-hotspots/decisions.md` the decisions this change makes — mirror, source-paced sync, served application, shared triage, role selection, and the removal of this repository's scheduled job — with their reasons, and verify the narrative record matches these specs
 - [ ] 8.6 Retain the doorway and block lists per sync in the store, and verify the record of which doorway left the list and when survives the removal of the scheduled job that was building it by accident in git history
 - [ ] 8.7 Stop generating committed output to `out/`, and verify the exports in 7.7 are the only way a list leaves the application
-- [ ] 8.8 Correct the unsourced "weekly-refreshed source" claim wherever it is repeated, and verify no document states a source refresh interval that nothing measured supports
+- [x] 8.8 Correct the unsourced "weekly-refreshed source" claim wherever it is repeated, and verify no document states a source refresh interval that nothing measured supports
 
 ## 9. Verification
 

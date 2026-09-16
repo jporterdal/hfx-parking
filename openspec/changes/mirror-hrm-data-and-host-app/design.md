@@ -8,13 +8,13 @@ Measurements taken live on 2026-09-15 against `services2.arcgis.com/11XBiaBYA9Ep
 
 | Measurement | Value |
 |---|---|
-| Offset page fetch, 1,000 rows | 0.52 s, 130 KB |
+| Offset page fetch, 1,000 rows | 0.52 s, 130 KB (re-measured during the load: 0.77 s requests, 1.06 s custom fields) |
 | Current per-type run, `Driveway` | 3 m 31 s for 9,834 calls |
 | — of which census polygons | 3.7 s |
 | Distinct raw `Alleged Violation` labels | 71 |
 | Calls carrying an alleged violation | 110,900 |
 | — excluding `Other` (7,542) and `Left Running` | ~103,300 |
-| Parking slice of custom-fields layer | 776,300 rows (7 fields × 110,900) |
+| Custom-fields layer, full | 1,156,710 rows, 88 field names (the 7 parking fields are 776,298 of them) |
 | Requests layer, all categories | 478,458 rows |
 | Requests still open (`DATE_CLOSED IS NULL`) | 3,351 |
 | Highest `ObjectId` on requests layer | 478458, dated 2026-09-11 |
@@ -43,23 +43,70 @@ Two of those deserve emphasis. The current run is slow because of its query shap
 
 The pipeline currently re-queries HRM on every invocation. It will instead read a local store that a separate sync process fills.
 
-The arithmetic is one-sided. A full copy of everything the product could ever need is about 1,250 pages at 0.52 seconds, so roughly eleven minutes serially and a small fraction of that in parallel. The current approach spends 3.5 minutes to answer a question about one of thirty types, and would spend 35 to 45 minutes nightly to answer it about all of them. Copying the whole corpus once costs less than one night of the status quo.
+The arithmetic is one-sided. A full copy of everything the product could ever need is 1,640 pages, **observed at 25 minutes 10 seconds serially** and a fraction of that in parallel. (This design first estimated 1,250 pages and eleven minutes; that figure was sized against the parking slice of the custom-fields layer, while the mirror holds it in full.) The current approach spends 3.5 minutes to answer a question about one of thirty types, and would spend 35 to 45 minutes nightly to answer it about all of them. Copying the whole corpus once costs less than one night of the status quo.
 
 This directly retires the sibling change's D14, which argued "at this scope the snapshot buys nothing: the selection is ~33 id-chunk fetches plus 610 census polygons." That was accurate for a single hardcoded violation type. D18 then widened the scope to roughly thirty types and flagged the consequence as unmeasured. It is measured now, and it is the reason D14 no longer holds.
 
-Note what is *not* being built. D14 rejected "a resumable snapshot store," and R5 recorded the same rejection. A mirror with a watermark is a smaller thing than the resumable ingest pipeline that was rejected: there is no checkpointed multi-stage job to resume, only a high-water mark to advance. A failed sync is retried from the last watermark on the next schedule, which is the same recovery story D14 accepted for a failed run.
+Note what is *not* being built. D14 rejected "a resumable snapshot store," and R5 recorded the same rejection. A mirror reloaded on publish is a smaller thing than the resumable ingest pipeline that was rejected: there is no multi-stage job, only one layer paged into a staging table and swapped in whole. The only checkpoint is the page offset of that fill, and it holds only for the version the fill began on — if HRM publishes again mid-fill, the fill starts over. A failed sync leaves the previous version serving and is retried on the next schedule, which is the same recovery story D14 accepted for a failed run.
 
-### M2. Sync by monotonic identifier, and refetch the mutable set in full
+### M2. Replace the version, do not chase changes within it
 
-Neither Cityworks layer publishes a last-modified field. The requests layer carries `DATE_INITIATED` and `DATE_CLOSED`; the custom-fields layer carries only `REQUESTID`, `CUSTOM_FIELD_ID`, `CUSTOM_FIELD_NAME`, `CUSTOM_FIELD_VALUE` and `ObjectId`. So there is no timestamp to filter an incremental pull on.
+**This decision reverses an earlier one in this document.** The earlier M2 specified an incremental sync: advance a per-layer high-water mark on `ObjectId` to capture inserts, and refetch the open-request set to catch edits. It was implemented, and then the premise was measured and found false.
 
-`ObjectId` supplies one. It is monotonic with recency — the highest value on the requests layer, 478458, carries the most recent initiation date in the data — so `ObjectId > watermark` captures every row inserted since the last sync.
+**What the source actually is.** The three layers are not append logs that can be read incrementally. They are published snapshots, and the service says so:
 
-A watermark alone would be wrong, because it captures inserts and misses edits. Rows do get edited: a request closes after it is filed, and its `DATE_CLOSED`, `STATUS` and `RESOLUTION` change in place without its `ObjectId` moving. The mutable population is bounded and small — 3,351 requests are currently open — so the sync refetches that entire set every time, at four pages, alongside the watermark pull. Any request the mirror holds as open and the service no longer returns as open has closed, and is updated.
+```
+hasStaticData        True                  — declared not edited in place
+capabilities         Query,Extract         — no Create/Update/Delete exists
+uniqueIdField        ObjectId (isSystemMaintained: True)
+dataLastEditDate  == schemaLastEditDate    on all three layers
+```
 
-The same reasoning applies to the custom-fields rows attached to an open request, notably `Vehicle Was Towed`, which can be set after the call is filed. Those are refetched by request identifier for the open set.
+`ObjectId` is assigned by ArcGIS, not by HRM, and a republish assigns it afresh. The stored evidence agrees: the id space is **dense 1 to N with zero gaps** on both Cityworks layers — 478,458 and 1,156,710 rows with not one hole — which no feature class retains after nine years of edits and deletions. It is a row counter written at load time, ordered by something like category rather than by date. Hence `object_id` 1 carries a 2023 call, 300,000 carries a 2020 call, and the newest call in the data sits at 262,781 while the highest id is 478,458.
 
-This is an assumption with a failure mode, and it should be stated rather than buried: **if HRM ever edits a long-closed record in place, this sync will not see it.** The mitigation is a periodic full reload — cheap, at eleven minutes — rather than a cleverer incremental rule. Cheapness is the argument for the whole design; it applies here too.
+**Why the watermark cannot be patched into correctness.** If a publish reloads in the same order with new rows interleaved into their category groups, every id after each insertion point shifts. `ObjectId > watermark` then returns rows that merely *moved* past the mark — which the upsert inserts under new primary keys, duplicating records already held — while genuinely new rows that landed below the mark are never seen at all. The failure is not "some rows arrive below the maximum." It is that the identifier carries no stable meaning across versions.
+
+Chasing changes within a version is a category error when the source has no notion of a change within a version. It has versions.
+
+**So: poll the version, and when it moves, take it whole.** `editingInfo.lastEditDate` is the version number (M3). When it advances, the layer is reloaded in full. Nothing in this depends on any property of `ObjectId`.
+
+**The cost argument that justified incremental does not survive measurement:**
+
+| | |
+|---|---|
+| Night with nothing published | 1.2 s, 3 requests as measured; 6 since each quiet night also reconciles counts (3.5), time not re-measured |
+| Full reload when a publish lands | 25 minutes, ~213 MB |
+| At roughly 52 publishes a year | ~11 GB from a public endpoint |
+
+The annual figures assume a weekly publish, which is not measured: one publish has been observed. They are subject to change once the sync has recorded more of HRM's actual publishes (M3), and the conclusion holds unless publishes turn out to be far more frequent.
+
+That is a rounding error against correctness that rests on no assumption at all.
+
+**It also deletes machinery rather than adding it.** A full reload retrieves current state for every row, so the open-set refetch is redundant: closures, `STATUS`, `RESOLUTION` and a `Vehicle Was Towed` flag set after filing all arrive because everything arrives. The tow-bias argument the earlier M2 pressed hard — that a watermark-only sync would under-count the only published enforcement outcome and bias the project's central finding in the direction that flatters it — was a real hazard of the method being replaced, not of the source. It disappears with the method.
+
+**What was actually true in the earlier M2** and survives: requests do get edited after filing, and 3,351 are open at any time. That is why a sync cannot be additive. The conclusion changes from "refetch the mutable subset" to "replace the whole version", which covers it and more.
+
+### M2a. The watermark question is deferred, not closed
+
+Reload-on-publish is correct under every hypothesis about `ObjectId`, which is why it is safe to adopt now. It is not necessarily optimal. If identifiers turn out to be stable across publishes, an incremental sync would be cheaper, and this decision should be revisited rather than treated as settled.
+
+The reason it cannot be decided now is simply that **we have no cross-publish observation of identifiers**. The mirror was loaded after HRM's 2026-09-13 publish and no publish has occurred since, so every measurement above comes from a single version. Comparing the committed CSV snapshots either side of that publish showed records persisting — no address's all-time call count decreased and no `last_call` moved backwards across 344 shared addresses — but those files carry no `REQUEST_ID` and no `ObjectId`, so a reload that preserved every record while renumbering it would produce byte-identical output. The evidence is consistent with both hypotheses.
+
+**So the reload records what a later decision will need.** On each reload, before the previous version is replaced, the system retains the version's identity: its `lastEditDate`, its row count, its highest identifier, and a sample of `REQUEST_ID` to `ObjectId` mappings. After several publishes that sample answers the question directly — if a request keeps its identifier across versions, a watermark becomes viable and worth costing; if it does not, the question is closed for good and this decision stands on evidence rather than on the absence of it.
+
+A sample rather than the full mapping because 478,458 rows per version is a needless cost to answer a yes-or-no question, and a few thousand stable-or-not observations settle it. The sample is a **fixed residue class of the business key** — every 128th `REQUEST_ID`, which is 3,721 requests and 9,229 custom-field rows — and fixed is the load-bearing word. Two independent random samples of four thousand out of 478,458 would share about nineteen records; the same residue class in every version shares every record present in both. A stride derived from the row count would drift as the layer grows and produce exactly the disjoint samples it is there to avoid.
+
+As implemented: `layer_versions` holds one row per published version, `layer_version_samples` holds its key-to-identifier sample, and both are written twice per reload — for the version going out, before a row of it is touched, and for the version coming in. The version one reload records as incoming is the one the next finds on its way out, so the chain has no gaps and no duplicates.
+
+**Reading the answer costs nothing and needs no new instrumentation:**
+
+```
+python3 src/mirror/sync.py --versions
+```
+
+reports every retained version, and for the two most recent, how many sampled records kept their `ObjectId` and how many moved. With one version retained it says so rather than failing: "not yet answerable" is a state of knowledge.
+
+Revisit when: at least four publishes have been observed, which at a roughly weekly cadence is about a month. That cadence is an assumption, not a measurement, and the estimate is subject to change once the recorded publish history shows the real interval; the trigger is four publishes, not the elapsed time. Four, not one, because a single publish could preserve identifiers by accident — an unchanged load order over an unchanged corpus — while the next reshuffles them. The retained samples answer it for every consecutive pair, so the question is decided on a pattern rather than on one observation.
 
 ### M3. Pace the sync by the source's own update clock, not by an assumed interval
 
@@ -197,15 +244,17 @@ There is one constraint the filters must not break. A threshold is part of what 
 ## Risks / Trade-offs
 
 - **A silent sync failure serves stale data behind a healthy-looking page** → the central risk, addressed by M4: recorded sync outcomes, last-successful-sync on every view, and a visible staleness warning. It is a genuine regression in failure honesty relative to a stateless pipeline, bought deliberately.
-- **`ObjectId` monotonicity is an inference, not a documented contract** → verified today, and the sync is designed so that being wrong degrades rather than corrupts: a periodic full reload costs eleven minutes and repairs any drift.
-- **In-place edits to long-closed records are invisible to the watermark** → M2 states this. The open-set refetch covers the common case (closure and outcome edits); the periodic full reload covers the rest.
+- **`ObjectId` is not monotonic with recency** → asserted from one observation and disproven on measurement (correlation 0.30, 31 per cent of adjacent pairs stepping backwards). It no longer matters to the sync: M2 reloads a layer whole when its published version advances, and nothing in that path depends on any property of `ObjectId`. It is still recorded as an observation.
+- **A republish may renumber every record** → under the retired watermark this would have silently duplicated rows. Under reload-on-publish a renumbered version simply replaces the previous one, swapped in atomically, so no duplicate can arise. Whether renumbering actually happens is left open rather than guarded against: each reload retains a fixed sample of `REQUEST_ID` to `ObjectId` mappings (M2a), and comparing retained versions answers it.
+- **The custom-fields layer backfills rows for years-old calls** → the newest 710 ids include a row attached to a 2022 call, so neither an id nor a call date says whether a row is new. Nothing relies on either: a publish is reloaded whole, so backfilled rows arrive with everything else, and the stored count is reconciled against the service's own count on every reload.
+- **Records are edited after filing, including long-closed ones** → closures, `STATUS`, `RESOLUTION` and a tow flag set later all change existing rows. A full reload retrieves current state for every row, so no edit path is needed. The residual gap is timing: an edit is seen only once HRM publishes it, and the mirror is no fresher than the source's own schedule.
 - **The mirror can diverge from the source without anyone noticing** → the reconciliation task compares mirror row counts against the service's own count queries per sync, so divergence is detected rather than assumed absent.
 - **A served application loses the mailable, archivable, offline-openable file** → M5 keeps the file export for exactly this.
 - **Public URL plus shared writable triage means anyone can mark a doorway** → M7 accepts this at demo scale and requires the application to say so rather than imply otherwise.
 - **The analysis could regress silently while moving to local data** → the pipeline has no automated tests, a risk the sibling change already records. Reconciling every published figure against the pre-change run is the compensating control here, and it is weaker than tests.
 - **Wider type coverage becomes cheap before it becomes validated** → D19 still governs. A type whose own tow and vehicle figures do not resemble driveway's must not inherit driveway's conclusion, and cheap computation makes it easier to publish a type that has not been read.
 - **The sync cadence rests on an inference, not documentation** → no published HRM refresh schedule was found, and the one interval claim in the repository was unsourced. Mitigated by pacing on `lastEditDate` and measuring the cadence rather than asserting it.
-- **`lastEditDate` may not move for every change** → if HRM edits rows without the layer's edit timestamp advancing, a poll-driven sync would not fire. The watermark pull and open-set refetch still run on their own schedule, so the poll accelerates sync rather than gating it.
+- **`lastEditDate` may not move for every change** → if HRM edits rows without the layer's edit timestamp advancing, a poll-driven sync would not fire, and nothing else would catch it: the watermark pull and open-set refetch that once ran independently of the poll are retired (M2), so the poll now gates every pull. **Accepted for now.** The layers declare `hasStaticData` and offer only `Query` and `Extract`, which points to wholesale publishes rather than in-place edits, and `dataLastEditDate` equals `schemaLastEditDate` on all three. That is inference from service metadata, not observation of how HRM updates the source. Research into HRM's actual publishing method may inform or overrule this acceptance; if it shows edits that do not advance `lastEditDate`, a backstop independent of the poll — a scheduled full reload, or a count comparison on polls that do not reload — becomes required rather than optional.
 - **A next-update promise outlives the scheduler that keeps it** → M4 makes the next-sync display a state machine with an overdue state rather than a rendered date.
 - **Interactive filters change what a figure means** → a view and an export both state the filter values that produced them, so a screenshot cannot be read as the default list.
 - **Excluding 311 could be misread as an oversight** → M10 records the exclusion, its cost, and the verification that nothing in the product depends on it.

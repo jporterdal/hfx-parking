@@ -182,8 +182,8 @@ An earlier version of this work ranked each doorway by the four-hour window hold
 That baseline is wrong and the finding does not hold.
 
 Calls are not spread evenly over 24 hours, so 4 divided by 24 is not the right null.
-85 per cent of these calls arrive on the `INTERNAL` channel, which records 6 calls out of 8,344 between 21:00 and 07:00 and peaks at 13:00.
-The citizen-typed `311 Online` channel spreads across all 24 hours and peaks at 18:00.
+85 per cent of these calls arrive on the `INTERNAL` channel, which records 4 calls out of 8,345 between 21:00 and 07:00, Halifax local time, and peaks at 13:00.
+The citizen-typed `311 Online` channel spreads across nearly all 24 hours and peaks at 18:00.
 So the timestamp is the hour a staff member keyed the call, not the hour the driveway was blocked.
 
 Tested against a null drawn from the pooled hour distribution, with the same best-of-24 maximum:

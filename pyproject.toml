@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "db: needs the Postgres mirror; skipped when it cannot be reached",
+]

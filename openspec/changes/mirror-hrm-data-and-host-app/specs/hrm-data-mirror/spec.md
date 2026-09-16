@@ -8,7 +8,7 @@ A mirror can be stale in a way a live query cannot, so this capability is respon
 
 ### Requirement: Hold a local copy of the source layers
 
-The system SHALL maintain a local store of the HRM Cityworks service requests, the parking-relevant rows of the Cityworks custom-fields layer, and the census dissemination areas, sufficient for every downstream capability to run without querying the source.
+The system SHALL maintain a local store of the HRM Cityworks service requests, the Cityworks custom-fields layer **in full**, and the census dissemination areas, sufficient for every downstream capability to run without querying the source.
 
 Downstream analysis SHALL read only from this store. No analysis path may fall back to a live query against the source, because a partial fallback would make it impossible to tell whether a result came from mirrored or live data.
 
@@ -26,7 +26,7 @@ Downstream analysis SHALL read only from this store. No analysis path may fall b
 
 The initial load SHALL retrieve rows by paging on offset rather than by requesting identifier chunks.
 
-The distinction is measured, not stylistic: identifier-chunk queries against these layers cost roughly six seconds per chunk, while offset paging the same layers returns 1,000 rows in about half a second. The full corpus is roughly 1,250 pages.
+The distinction is measured, not stylistic: identifier-chunk queries against these layers cost roughly six seconds per chunk, while offset paging the same layers returns 1,000 rows in about a second. The full corpus is 1,640 pages — 1,157 custom fields, 476 requests, 4 census.
 
 #### Scenario: Full load completes
 
@@ -38,49 +38,48 @@ The distinction is measured, not stylistic: identifier-chunk queries against the
 - **WHEN** an initial load fails partway
 - **THEN** a subsequent load continues from the last completed page rather than restarting
 
-### Requirement: Sync incrementally by monotonic identifier
+### Requirement: Replace a layer wholly when its published version advances
 
-Neither Cityworks layer publishes a last-modified field, so incremental sync SHALL advance a per-layer high-water mark on `ObjectId`, retrieving rows whose identifier exceeds the mark.
+The source layers are published snapshots, not append logs: the service declares `hasStaticData` true, offers only `Query` and `Extract`, and reports the same edit instant for data and schema. Their `ObjectId` is system-maintained by the service and assigned afresh on each publish — the stored id space is dense from 1 to N with no gaps, which is a row counter written at load time, not a durable record identity.
 
-The system SHALL verify that the identifier is monotonic with respect to recency at sync time rather than assuming it, and SHALL report when that assumption fails.
+The system SHALL reload a layer in full when its published version advances, and SHALL NOT attempt to retrieve only the rows that changed within a version.
 
-#### Scenario: New rows are captured
+The system SHALL NOT depend on any property of `ObjectId` surviving a publish — not its ordering, not its stability for a given record, and not its relationship to any date.
 
-- **WHEN** a sync runs after rows have been added to the source
-- **THEN** those rows are stored and the watermark advances to the highest identifier retrieved
+#### Scenario: A published version advances
 
-#### Scenario: No new rows
+- **WHEN** a layer's published edit timestamp is later than the version the mirror holds
+- **THEN** that layer is reloaded in full and its stored count is reconciled against the service's own count
 
-- **WHEN** a sync runs and the source has no rows beyond the watermark
-- **THEN** the sync is recorded as successful, the watermark is unchanged, and no error is raised
+#### Scenario: Edits within a version need no special handling
 
-#### Scenario: Monotonicity assumption is violated
+- **WHEN** a request the mirror held as open has since closed, or a tow flag has been set after filing
+- **THEN** the reload reflects the current state, because every row is retrieved rather than a subset
 
-- **WHEN** a retrieved row carries an identifier above the watermark but an initiation date older than rows already held
-- **THEN** the system reports the anomaly rather than silently accepting it
+#### Scenario: Identifiers are not trusted across versions
 
-### Requirement: Refetch the mutable request set on every sync
+- **WHEN** a reload assigns different identifiers to records the mirror already held
+- **THEN** the mirror is correct regardless, because the previous version is replaced rather than merged into
 
-A high-water mark captures inserts and misses edits. Requests are edited in place after filing: a request closes, and its closure date, status and resolution change without its identifier moving. The tow flag on its custom-field rows can likewise be set after the call is filed.
+### Requirement: Retain each version's identity so the sync method can be re-evaluated
 
-The system SHALL therefore refetch, on every sync, the full set of requests the mirror holds as open, together with their custom-field rows, and update them. The set is bounded and small — 3,351 requests were open when this was specified — so refetching it entirely costs a handful of pages.
+Reloading in full is correct under every hypothesis about identifier stability, which is why it is adopted before that stability is known. It is not necessarily the cheapest method, and whether an incremental sync is possible SHALL remain an open question rather than be treated as settled.
 
-A request the mirror holds as open which the source no longer reports as open SHALL be updated to its current state.
+No cross-publish observation of identifiers exists: the mirror was loaded from a single published version. Committed output either side of an earlier publish shows records persisting, but carries no identifiers, so it cannot distinguish a preserving reload from a renumbering one.
 
-#### Scenario: A request closes after it was mirrored
+The system SHALL record, on each reload and before the previous version is replaced, that version's published edit timestamp, its row count, its highest identifier, and a sample of business-key to identifier mappings sufficient to detect renumbering.
 
-- **WHEN** a request held as open has since been closed at the source
-- **THEN** the next sync updates its closure date, status and resolution in the mirror
+A sample rather than the complete mapping, because a few thousand observations settle a yes-or-no question that the full set would answer at needless cost.
 
-#### Scenario: A tow flag is set after filing
+#### Scenario: Version identity is retained
 
-- **WHEN** the tow custom-field value for a request held as open changes at the source
-- **THEN** the next sync reflects the new value
+- **WHEN** a reload replaces a layer
+- **THEN** the replaced version's edit timestamp, row count, highest identifier and key-to-identifier sample remain queryable afterwards
 
-#### Scenario: Edits to long-closed records
+#### Scenario: Renumbering is detectable across versions
 
-- **WHEN** a record the mirror holds as closed is edited at the source
-- **THEN** the system does not claim to have captured it, and a periodic full reload is the stated remedy
+- **WHEN** two or more versions have been retained
+- **THEN** whether a given business key kept its identifier between them can be determined from the retained samples
 
 ### Requirement: Pace the sync by the source's own update clock
 
@@ -197,9 +196,9 @@ Retention SHALL be queryable alongside the calls that produced it, and SHALL NOT
 
 ### Requirement: Reconcile the mirror against the source
 
-The system SHALL compare, on each sync, the row count it holds per layer against the source's own count query for that layer, and SHALL report a divergence.
+The system SHALL compare, on each sync, the row count it holds per layer against the source's own count query for that layer, and SHALL report a divergence. The system SHALL also provide a re-runnable row-level reconciliation of a violation type's selection against the service, reporting ids, rows and values that differ.
 
-A mirror that has drifted from its source is worse than no mirror, because it carries the authority of a complete copy. The check is one request per layer.
+A mirror that has drifted from its source is worse than no mirror, because it carries the authority of a complete copy. The count check is one request per layer. Equal counts do not prove equal rows, which is why the row-level check exists and why nothing depends on the mirror until it has passed.
 
 #### Scenario: Counts agree
 
@@ -211,11 +210,23 @@ A mirror that has drifted from its source is worse than no mirror, because it ca
 - **WHEN** stored counts differ from the service's counts
 - **THEN** the divergence is reported with both figures rather than being resolved silently
 
+#### Scenario: Rows are identical for a selection
+
+- **WHEN** a violation type's selection is reconciled at row level against the service, with the mirror holding the service's current published version
+- **THEN** the mirror and the service hold the same request ids, the same service-request field values and the same custom-field rows and values for that selection, and any id, row or value present on one side only is reported
+
+#### Scenario: Row-level reconciliation against a newer publish
+
+- **WHEN** the service has published a version newer than the one the mirror holds
+- **THEN** the reconciliation reports the version difference before any row difference, and does not reload or top up the mirror itself
+
 ### Requirement: Support a full reload
 
 The system SHALL support discarding and rebuilding the mirror from the source.
 
-This is the stated remedy for every failure mode the incremental rule cannot cover — in-place edits to long-closed records, a violated monotonicity assumption, an unexplained count divergence. It is viable as a remedy because it is cheap: the full corpus is roughly 1,250 pages at about half a second each.
+A full reload is the primary sync path, not a fallback: it is what happens whenever a published version advances. It SHALL also be available on demand, for an unexplained count divergence or any other reason to distrust what is held.
+
+It is viable as the primary path because it is cheap at this cadence: the full corpus is 1,640 pages, observed at 25 minutes 10 seconds and roughly 213 MB, against a source that publishes on the order of weekly.
 
 #### Scenario: Full reload restores agreement
 

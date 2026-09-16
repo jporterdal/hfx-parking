@@ -47,7 +47,7 @@ An earlier version ranked each doorway by the four-hour window holding most of i
 That is wrong and it is worth saying why, because most teams will build it.
 
 - 4 divided by 24 is not the right null. Calls are not spread evenly over the day.
-- 85 per cent of these calls arrive on the `INTERNAL` channel, which records 6 calls out of 8,344 between 21:00 and 07:00 and peaks at 13:00. The citizen-typed `311 Online` channel spreads across all 24 hours and peaks at 18:00. The timestamp is when staff keyed the call, not when the driveway was blocked.
+- 85 per cent of these calls arrive on the `INTERNAL` channel, which records 4 calls out of 8,345 between 21:00 and 07:00, Halifax local time, and peaks at 13:00. The citizen-typed `311 Online` channel spreads across nearly all 24 hours and peaks at 18:00. The timestamp is when staff keyed the call, not when the driveway was blocked.
 - Against a matched null, the observed 58.9 per cent sits against a null mean of 48.8 per cent, and only 17 of 58 addresses beat their own 95th percentile.
 - Out of sample, a per-address tuned window scores 47.5 per cent against 41.7 per cent for one city-wide window. Weekday tuning actually loses to a city-wide block, 35.7 against 37.9.
 

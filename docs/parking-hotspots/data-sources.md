@@ -23,7 +23,7 @@ Fields used:
 | Field | What it gives you |
 |-------|-------------------|
 | REQUEST_ID | The join key. |
-| DATE_INITIATED | When the call came in, with the time. Stored in UTC. Halifax is UTC-3 in summer. |
+| DATE_INITIATED | When the call came in, with the time. Stored in UTC. Halifax is UTC-3 (ADT) in summer, UTC-4 (AST) the rest of the year — convert with a DST-aware timezone, not a fixed offset. |
 | DATE_CLOSED | When the city closed the call. |
 | DESCRIPTION | The call type, for example "Illegally Parked Vehicle" or "Trees". |
 | ADDRESS | Free text. Carries the city and postal code, so strip them before grouping. |
@@ -38,8 +38,8 @@ Fields used:
 
 **A warning about `DATE_INITIATED`.**
 It is when the call entered Cityworks, not when the problem happened.
-85 per cent of blocked driveway calls arrive on the `INTERNAL` channel, which records 6 calls out of 8,344 between 21:00 and 07:00 and peaks at 13:00.
-The citizen-typed `311 Online` channel spreads across all 24 hours and peaks at 18:00.
+85 per cent of blocked driveway calls arrive on the `INTERNAL` channel, which records 4 calls out of 8,345 between 21:00 and 07:00, Halifax local time, and peaks at 13:00.
+The citizen-typed `311 Online` channel spreads across nearly all 24 hours and peaks at 18:00.
 Any hour-of-day finding built on the pooled data is measuring office hours.
 Split by `INITIATED_BY` before you use the hour.
 
@@ -70,6 +70,11 @@ Alleged Violation values, top five:
 | On Highway Over 24 Hours | 12,187 |
 | Blocking Driveway (DISPATCH) | 9,729 |
 | Over Time Specified | 4,892 |
+
+The 71 raw labels group into 30 canonical types, each a current label with its `(DISPATCH)` variant and its legacy short code, frozen on 2026-09-16 in `src/mirror/violation_types.py`.
+Two legacy codes are left unmapped because neither reduces to one current label: `OVERTIME` (1 call) could be `Over Time at Meter` or a catch-all from before `Over Time Specified` got its own code, and `VIOLATION` (4 calls) names no type at all.
+Together they are 5 calls, so the grouping covers 99.995 per cent of calls outside `Other` and `Left Running`.
+66 further calls carry the field with no value.
 
 ### 3. Census 2021 Dissemination Areas
 
@@ -103,7 +108,7 @@ Verified against the service's own `esriSpatialRelIntersects` query on six addre
 - 2,423 illegal parking calls carry no address at all.
 - `Vehicle Was Towed` is the only enforcement outcome published. There is no ticketing field anywhere in the 87 distinct custom field names, and `RESOLUTION` has no "ticket issued" value. A call with no tow is a call with no recorded outcome, not proof that nothing was done.
 - `DATE_CLOSED` is when the service request closed. For parking that is close to the real end of the job. For trees it is not, because the call closes when a work order opens.
-- Timestamps are UTC. Convert to UTC-3 before you talk about hour of day.
+- Timestamps are UTC. Convert to `America/Halifax` local time before you talk about hour of day — Halifax is UTC-4 (AST) for most of the year and UTC-3 (ADT) only in summer, so a fixed offset is wrong outside daylight saving; use a DST-aware conversion (`zoneinfo.ZoneInfo("America/Halifax")`).
 - The ArcGIS layers page at 1,000 rows per request. Use `resultOffset`. The census layer pages at 200 when geometry is returned.
 - A dissemination area is a census unit, not a neighbourhood anyone in Halifax names. The script labels each block by the two streets its calls come from, which is readable, but the label is derived and not official.
 - `DATDWELL20` is total dwellings in the whole block, so calls per 1,000 dwellings is a rate across the block, not along the street the calls are on.

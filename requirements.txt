@@ -1,0 +1,10 @@
+# Server-side dependencies. This project previously had no manifest at all: the
+# pipeline in src/hotspots.py is stdlib-only and stays that way, so the viewer
+# still needs no install. The mirror and its tests do.
+#
+#   python3 -m venv venv
+#   venv/bin/pip install -r requirements.txt
+#   venv/bin/pytest
+
+psycopg[binary]==3.3.5
+pytest==9.1.1

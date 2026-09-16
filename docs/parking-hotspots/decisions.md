@@ -43,6 +43,9 @@ Reason.
 The service returns UTC.
 Halifax is UTC-3 in summer, so the offset moves every hour-of-day figure by three hours.
 
+**Correction, `mirror-hrm-data-and-host-app`.**
+The fixed UTC-3 offset above was wrong for the roughly half of the year Halifax observes AST (UTC-4), not ADT (UTC-3), moving every hour-of-day figure computed outside daylight saving by an hour. `src/hotspots.py`'s `to_local()` now converts with `zoneinfo.ZoneInfo("America/Halifax")`, which tracks the actual AST/ADT transition dates instead of a fixed offset. The hour-of-day and channel figures elsewhere in this document set have been re-derived under the corrected conversion; see `docs/parking-hotspots/product.md` and `docs/parking-hotspots/data-sources.md`.
+
 **2026-09-12, Chris.**
 Group by neighbourhood as well as by address.
 

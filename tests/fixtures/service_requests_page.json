@@ -1,0 +1,88 @@
+{
+ "features": [
+  {
+   "attributes": {
+    "REQUEST_ID": 2381683,
+    "DATE_INITIATED": 1701960122000,
+    "DATE_CLOSED": 1701961546000,
+    "DESCRIPTION": "Traffic Signals",
+    "INITIATED_BY": "INTERNAL",
+    "PRIORITY": "2",
+    "ADDRESS": "NANTUCKET AVE,  DARTMOUTH",
+    "COMMUNITY": "DARTMOUTH",
+    "DISTRICT": "5",
+    "REQUEST_CATEGORY": "TRAFFICMAINTENANCE",
+    "RESOLUTION": "Investigated, Work Order Opened or Linked",
+    "LATITUDE": 44.67006123045982,
+    "LONGITUDE": -63.577487756643905,
+    "STATUS": "CLOSED",
+    "DEPT_RESPONSIBILITY": "PW",
+    "WORK_ORDER": "N",
+    "ObjectId": 1
+   }
+  },
+  {
+   "attributes": {
+    "REQUEST_ID": 2402853,
+    "DATE_INITIATED": 1709036192000,
+    "DATE_CLOSED": 1709129794000,
+    "DESCRIPTION": "Obstructions",
+    "INITIATED_BY": "INTERNAL",
+    "PRIORITY": "4",
+    "ADDRESS": "3368 BARRINGTON ST,  HALIFAX,  B3K 3K3",
+    "COMMUNITY": "HALIFAX",
+    "DISTRICT": "8",
+    "REQUEST_CATEGORY": "ROWSERVICES",
+    "RESOLUTION": "Requested Service Provided",
+    "LATITUDE": 44.66857244953525,
+    "LONGITUDE": -63.60049186834175,
+    "STATUS": "CLOSED",
+    "DEPT_RESPONSIBILITY": "PW",
+    "WORK_ORDER": "N",
+    "ObjectId": 2
+   }
+  },
+  {
+   "attributes": {
+    "REQUEST_ID": 2427008,
+    "DATE_INITIATED": 1717164345000,
+    "DATE_CLOSED": 1717178059000,
+    "DESCRIPTION": "Illegally Parked Vehicle",
+    "INITIATED_BY": "311 Online",
+    "PRIORITY": "3",
+    "ADDRESS": "185 WENTWORTH DR,  HALIFAX,  B3M 0N9",
+    "COMMUNITY": "HALIFAX",
+    "DISTRICT": "10",
+    "REQUEST_CATEGORY": "PARKING",
+    "RESOLUTION": "Requested Service Provided",
+    "LATITUDE": 44.67496696626793,
+    "LONGITUDE": -63.66077323464261,
+    "STATUS": "CLOSED",
+    "DEPT_RESPONSIBILITY": "PW",
+    "WORK_ORDER": "N",
+    "ObjectId": 3
+   }
+  },
+  {
+   "attributes": {
+    "REQUEST_ID": 2454259,
+    "DATE_INITIATED": 1724684229000,
+    "DATE_CLOSED": 1724685097000,
+    "DESCRIPTION": "Traffic Signals",
+    "INITIATED_BY": "INTERNAL",
+    "PRIORITY": "4",
+    "ADDRESS": "294 LACEWOOD DR,  HALIFAX",
+    "COMMUNITY": "HALIFAX",
+    "DISTRICT": "10",
+    "REQUEST_CATEGORY": "TRAFFICMAINTENANCE",
+    "RESOLUTION": "Investigated, Work Order Opened or Linked",
+    "LATITUDE": 44.662089903411015,
+    "LONGITUDE": -63.65770886561238,
+    "STATUS": "CLOSED",
+    "DEPT_RESPONSIBILITY": "PW",
+    "WORK_ORDER": "N",
+    "ObjectId": 4
+   }
+  }
+ ]
+}

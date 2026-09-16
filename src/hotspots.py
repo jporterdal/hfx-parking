@@ -28,13 +28,17 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import zoneinfo
 
 BASE = "https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services"
 SR = BASE + "/Cityworks_Service_Requests/FeatureServer/0/query"
 CF = BASE + "/Cityworks_Service_Requests_Custom_Fields/FeatureServer/0/query"
 DA = BASE + "/Census_2021_Dissemination_Areas/FeatureServer/0/query"
 PAGE = 1000
-ATLANTIC = datetime.timedelta(hours=-3)  # ADT. Timestamps arrive in UTC.
+# Halifax observes AST (UTC-4) and ADT (UTC-3), switching on the same schedule as
+# the rest of North America. A fixed offset was wrong for roughly half the year;
+# zoneinfo carries the actual transition dates. Timestamps arrive in UTC.
+HALIFAX = zoneinfo.ZoneInfo("America/Halifax")
 VEHICLE_FIELDS = ("Vehicle Make", "Vehicle Model", "Vehicle Colour")
 STREET_NUMBER = re.compile(r"^\s*\d+[A-Z]?\s+")
 
@@ -79,7 +83,7 @@ def to_local(epoch_ms):
     if epoch_ms in (None, ""):
         return None
     utc = datetime.datetime.fromtimestamp(epoch_ms / 1000, datetime.UTC)
-    return utc + ATLANTIC
+    return utc.astimezone(HALIFAX)
 
 
 def clean_address(raw):

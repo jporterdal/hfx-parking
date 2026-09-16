@@ -22,9 +22,13 @@ instead of three.
 python3 src/hotspots.py
 ```
 
-No keys and no install.
+No keys and no install — for this pipeline and for anyone opening the board.
 It reads HRM open data over HTTPS and writes every output: the doorway list, the block list, and
 the standalone board.
+
+The mirror and the server that will replace this pipeline do have dependencies, listed in
+`requirements.txt` (this project previously had no manifest at all). `src/hotspots.py` stays
+stdlib-only, and a viewer still installs nothing.
 
 | Output | What it is |
 |--------|------------|
@@ -36,7 +40,8 @@ the standalone board.
 python3 src/hotspots.py --violation "No Parking Sign" --district 7
 ```
 
-`.github/workflows/nightly.yml` runs it on a schedule and commits the result, so no person has to.
+Nothing runs it on a schedule any more: the nightly workflow that committed to `out/` has been
+removed, and scheduled work moves to the deployment that serves the application.
 
 ## What it found
 
@@ -71,7 +76,7 @@ be a rate instead of a raw total.
 
 A per-address four-hour patrol window. It does not survive.
 
-`DATE_INITIATED` is when a staff member keyed the call, not when the driveway was blocked. The `INTERNAL` channel carries 85 per cent of these calls and records 6 out of 8,344 between 21:00 and 07:00. Out of sample, a tuned per-address window beats one city-wide window by only 5.8 points, and weekday tuning loses outright.
+`DATE_INITIATED` is when a staff member keyed the call, not when the driveway was blocked. The `INTERNAL` channel carries 85 per cent of these calls and records 4 out of 8,345 between 21:00 and 07:00, Halifax local time. Out of sample, a tuned per-address window beats one city-wide window by only 5.8 points, and weekday tuning loses outright.
 
 Most teams on this problem will build that window. It is the office clock.
 

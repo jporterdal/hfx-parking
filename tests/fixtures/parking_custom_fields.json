@@ -1,0 +1,130 @@
+{
+ "features": [
+  {
+   "attributes": {
+    "REQUESTID": 2101842,
+    "CUSTOM_FIELD_ID": 60050,
+    "CUSTOM_FIELD_NAME": "Alleged Violation",
+    "CUSTOM_FIELD_VALUE": "No Parking Sign",
+    "ObjectId": 22665
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2101842,
+    "CUSTOM_FIELD_ID": 60051,
+    "CUSTOM_FIELD_NAME": "Vehicle Make",
+    "CUSTOM_FIELD_VALUE": null,
+    "ObjectId": 22671
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2101842,
+    "CUSTOM_FIELD_ID": 60052,
+    "CUSTOM_FIELD_NAME": "Vehicle Model",
+    "CUSTOM_FIELD_VALUE": null,
+    "ObjectId": 22677
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2101842,
+    "CUSTOM_FIELD_ID": 60053,
+    "CUSTOM_FIELD_NAME": "Vehicle Colour",
+    "CUSTOM_FIELD_VALUE": null,
+    "ObjectId": 22683
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2101842,
+    "CUSTOM_FIELD_ID": 60055,
+    "CUSTOM_FIELD_NAME": "Vehicle Province",
+    "CUSTOM_FIELD_VALUE": null,
+    "ObjectId": 22689
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2101842,
+    "CUSTOM_FIELD_ID": 60056,
+    "CUSTOM_FIELD_NAME": "Vehicle Was Towed",
+    "CUSTOM_FIELD_VALUE": "N",
+    "ObjectId": 22706
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2101842,
+    "CUSTOM_FIELD_ID": 60057,
+    "CUSTOM_FIELD_NAME": "Property Ownership",
+    "CUSTOM_FIELD_VALUE": null,
+    "ObjectId": 22711
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2104114,
+    "CUSTOM_FIELD_ID": 60050,
+    "CUSTOM_FIELD_NAME": "Alleged Violation",
+    "CUSTOM_FIELD_VALUE": "No Parking Sign",
+    "ObjectId": 23303
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2104114,
+    "CUSTOM_FIELD_ID": 60051,
+    "CUSTOM_FIELD_NAME": "Vehicle Make",
+    "CUSTOM_FIELD_VALUE": "ford",
+    "ObjectId": 23310
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2104114,
+    "CUSTOM_FIELD_ID": 60052,
+    "CUSTOM_FIELD_NAME": "Vehicle Model",
+    "CUSTOM_FIELD_VALUE": "transit 250",
+    "ObjectId": 23317
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2104114,
+    "CUSTOM_FIELD_ID": 60053,
+    "CUSTOM_FIELD_NAME": "Vehicle Colour",
+    "CUSTOM_FIELD_VALUE": "white",
+    "ObjectId": 23324
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2104114,
+    "CUSTOM_FIELD_ID": 60055,
+    "CUSTOM_FIELD_NAME": "Vehicle Province",
+    "CUSTOM_FIELD_VALUE": "NS",
+    "ObjectId": 23331
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2104114,
+    "CUSTOM_FIELD_ID": 60056,
+    "CUSTOM_FIELD_NAME": "Vehicle Was Towed",
+    "CUSTOM_FIELD_VALUE": "N",
+    "ObjectId": 23338
+   }
+  },
+  {
+   "attributes": {
+    "REQUESTID": 2104114,
+    "CUSTOM_FIELD_ID": 60057,
+    "CUSTOM_FIELD_NAME": "Property Ownership",
+    "CUSTOM_FIELD_VALUE": "HRM",
+    "ObjectId": 23345
+   }
+  }
+ ]
+}
