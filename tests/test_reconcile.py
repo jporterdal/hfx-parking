@@ -1,5 +1,5 @@
 """Row-level reconciliation (3.6): the diff logic offline, and an end-to-end run
-against the throwaway `mirror_test` schema with a deliberately induced mismatch.
+against the throwaway `mirror_test_<pid>` schema with a deliberately induced mismatch.
 
 The source is always a fixture here — see `no_network` in conftest.py. Tests that
 touch Postgres are marked `db` and skip when it cannot be reached, same as

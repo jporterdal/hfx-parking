@@ -448,6 +448,9 @@ const BLOCK_ST = {
   noact:{label:"No action needed", pill:"none"}
 };
 let DEC = {}, db = null, sampler = null;
+// Task 6.1 supersedes db/loadLocal/saveLocal with server-backed shared
+// triage (see loadDecisions()/saveDecision(), below) -- they are kept,
+// unused by that path, because removing them is task 6.3's job.
 const LS_KEY = "halifax-triage-decisions";
 function loadLocal(){
   try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch(e){ return {}; }
@@ -949,13 +952,49 @@ async function save(it, status, note, quiet){
                label: mode === "block" ? it.s : it.a, kind: mode};
   DEC[it.key] = rec;
   if (quiet) { draw(); chips(); } else render();
-  if (!db){
-    saveLocal();
-    note2("Saved in this browser only. Nobody else sees it, and it is gone if you clear site data.");
-    return;
+  await saveDecision(it, status, note);
+}
+
+/* Task 6.1's write side: shared triage decisions now persist through this
+ * server, not through window.claude.use("db") or localStorage -- see the
+ * comment above loadDecisions() below for why those two are kept but no
+ * longer called from here. Backed by /api/types/<slug>/decisions (POST) in
+ * src/app/server.py, which upserts into the triage_decisions table
+ * (schema.sql, task 1.5) keyed on (violation_type, scope, item_key).
+ *
+ * scope/item_key are recovered from it.key rather than threaded through as
+ * separate arguments, because it.key is already exactly "d:"+slug(address)
+ * or "b:"+block id (see where ROWS/BLOCKS get .key assigned, above) -- the
+ * same two-character-prefix convention the old db.doc("decisions/"+...)
+ * call relied on. That keeps a doorway decision and a block decision from
+ * colliding even where their key text matches, and (DEFAULT_SLUG being part
+ * of the URL) keeps one violation type's decisions off another's list.
+ *
+ * A failed write is not swallowed: it lands in the console and in the same
+ * status banner loadDecisions() uses below, so task 6.4 ("state plainly when
+ * a decision could not be persisted") has a concrete failure to make visible
+ * on the row itself, rather than nothing to build on. 6.4 itself -- marking
+ * the specific row as unsaved -- is not built here.
+ */
+async function saveDecision(it, status, note){
+  const scope = it.key.startsWith("b:") ? "block" : "doorway";
+  const item_key = it.key.slice(2);
+  try{
+    const resp = await fetch(`/api/types/${DEFAULT_SLUG}/decisions`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({scope, item_key, decision: status, note: note || ""}),
+    });
+    if (!resp.ok){
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(body.error || `HTTP ${resp.status}`);
+    }
+    const saved = await resp.json();
+    if (DEC[it.key]) DEC[it.key].updatedAt = saved.updated_at || DEC[it.key].updatedAt;
+  }catch(e){
+    console.error("could not persist decision", it.key, e);
+    note2("Could not save that decision just now. It may not be visible to anyone else.");
   }
-  try { await db.doc("decisions/" + it.key.replace(":", "-")).set(rec); }
-  catch(e){ note2("Could not save that decision: " + (e && e.code ? e.code : "unknown error") + "."); }
 }
 const note2 = msg => { el("dbstate").textContent = msg; el("dbstate").hidden = !msg; };
 
@@ -1063,14 +1102,65 @@ resize();
 render();
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => draw());
 
+/* Task 6.1: load every decision recorded for this type from the server, on
+ * boot -- the read side of the same shared store saveDecision() (above)
+ * writes to. This is what makes a decision recorded by one viewer visible to
+ * a second viewer of the same type's list: both run this on load, both read
+ * the same triage_decisions rows through GET /api/types/<slug>/decisions.
+ */
+async function loadDecisions(){
+  try{
+    const resp = await fetch(`/api/types/${DEFAULT_SLUG}/decisions`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const payload = await resp.json();
+    const next = {};
+    (payload.decisions || []).forEach(d => {
+      const key = (d.scope === "block" ? "b:" : "d:") + d.item_key;
+      next[key] = {status: d.decision, note: d.note || "", updatedAt: d.updated_at};
+    });
+    DEC = next;
+    const nb = BLOCKS.filter(b => st(b.key) !== "none_").length;
+    const nd = ROWS.filter(r => st(r.key) !== "none_").length;
+    note2(nb + nd === 0
+      ? "Decisions save for everyone who opens this page. Nothing triaged yet."
+      : `${nb} of ${BLOCKS.length} blocks and ${nd} of ${ROWS.length} doorways triaged. Everyone on this page sees the same decisions.`);
+    render();
+  }catch(e){
+    // Deliberately not "Saved in this browser only" and deliberately not a
+    // fall-through to loadLocal(): a failed *read* of the shared store says
+    // nothing about the store itself being unavailable for writes, so
+    // resurrecting the old per-browser copy here would just be a second,
+    // quieter way back into the defect this task exists to end (see the
+    // comment on the window.claude.use("db") block below). 6.4 owns stating
+    // a failed *write* on the row itself; this is the read path's failure.
+    console.error("could not load shared decisions", e);
+    note2("Could not load shared triage decisions. Reload to try again.");
+  }
+}
+loadDecisions();
+
+/* Pre-6.1 shared-storage mechanism (design.md D13/M6): window.claude.use("db")
+ * is a capability only a Claude Artifact host grants; everywhere else,
+ * including this server, useCap("db") resolves to null (see useCap's
+ * definition above). loadDecisions() above is what now actually keeps every
+ * viewer of this page in step -- proposal.md's "shared triage has exactly
+ * one implementation ... which resolves to null off a Claude Artifact ...
+ * silently degrading every viewer to a private localStorage copy" is the
+ * defect that mechanism was. This block, loadLocal()/saveLocal() and the
+ * useCap binding itself are kept -- not called from loadDecisions() or
+ * saveDecision() -- only because removing them is task 6.3's job, not this
+ * one's (see that task's text: "remove ... from the served page ... (the
+ * localStorage read and write ..., the useCap binding ...)"). It no longer
+ * falls back to loadLocal() when db is null, because null is what db is on
+ * every host this page actually runs on today, and running that fallback
+ * unconditionally would overwrite loadDecisions()'s server-backed DEC with
+ * an empty per-browser copy on every single load -- silently reintroducing
+ * the exact defect this task closes, rather than merely leaving dead code
+ * behind for 6.3 to delete.
+ */
 (async () => {
   db = await useCap("db");
-  if (!db){
-    DEC = loadLocal();
-    note2("");
-    render();
-    return;
-  }
+  if (!db) return;
   db.collection("decisions").onSnapshot(
     snap => {
       const next = {};
@@ -1079,11 +1169,6 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
         next[id.startsWith("b-") ? "b:" + id.slice(2) : "d:" + id.slice(2)] = doc.data();
       });
       DEC = next;
-      const nb = BLOCKS.filter(b => st(b.key) !== "none_").length;
-      const nd = ROWS.filter(r => st(r.key) !== "none_").length;
-      note2(nb + nd === 0
-        ? "Decisions save for everyone who opens this page. Nothing triaged yet."
-        : `${nb} of ${BLOCKS.length} blocks and ${nd} of ${ROWS.length} doorways triaged. Everyone on this page sees the same decisions.`);
       render();
     },
     e => note2("Live updates stopped (" + e.code + "). Your own changes still save.")

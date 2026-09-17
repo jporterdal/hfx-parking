@@ -42,10 +42,28 @@ Route table:
                                          count, latest, summary, rows}`
   GET  /api/types/<slug>/blocks         a type's block list, `{type, slug,
                                          count, blocks}`
+  GET  /api/types/<slug>/decisions      every triage decision recorded for a
+                                         type, `{type, slug, decisions: [...]}`
+                                         -- task 6.1, see below
+  POST /api/types/<slug>/decisions      record one decision, upserted by
+                                         (type, scope, item_key) -- task 6.1
 
 Every list is computed per request from the mirror via `mirror.derive.derive`
 (design.md M11) -- nothing here materializes a doorway or block list ahead of a
 request.
+
+**Task 6.1: shared triage decisions.** `design.md` M6 and `proposal.md`
+record the defect this closes -- the served page's only prior shared-storage
+mechanism was `window.claude.use("db")`, which resolves to `null` off a
+Claude Artifact host and silently degrades every viewer to a private
+`localStorage` copy. The two routes above read and write
+`mirror.triage`'s `triage_decisions` table (`schema.sql`, task 1.5) instead,
+so every viewer of a type's list reads and writes the same rows -- see
+`mirror/triage.py`'s module docstring for the persistence and scoping
+details, and `web/app/index.html`'s `loadDecisions()`/`saveDecision()` for
+the client side. `web/app/index.html` still carries the pre-6.1
+`window.claude.use("db")`/`localStorage` code paths; removing them is task
+6.3's job, not this one's (see that file's comments).
 
 **Why the route already looks like `/api/types/<slug>/...` when only one type
 answers.** Task 5.2 routes every canonical type this way; building that switch
@@ -84,9 +102,9 @@ _SRC_DIR = _REPO_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from flask import Flask, jsonify, send_from_directory  # noqa: E402
+from flask import Flask, jsonify, request, send_from_directory  # noqa: E402
 
-from mirror import db, derive, violation_types  # noqa: E402
+from mirror import db, derive, triage, violation_types  # noqa: E402
 
 WEB_DIR = _REPO_ROOT / "web"
 APP_WEB_DIR = WEB_DIR / "app"
@@ -276,6 +294,71 @@ def create_app(conn_factory=None):
             type=canonical, slug=slug, count=len(result["blocks"]),
             blocks=_block_payload(result["blocks"]),
         )
+
+    @app.get("/api/types/<slug>/decisions")
+    def get_decisions(slug):
+        """Every decision recorded for one type (task 6.1). Read side of
+        shared triage -- `web/app/index.html`'s `loadDecisions()` calls this
+        on boot so every viewer starts from the same rows, instead of the
+        pre-6.1 `window.claude.use("db")` path that only ever worked inside a
+        Claude Artifact host.
+        """
+        canonical = _canonical_for_slug(slug)
+        if canonical is None:
+            return jsonify(error="untracked", slug=slug), 404
+        conn = connect()
+        try:
+            decisions = triage.list_for(conn, canonical)
+        finally:
+            conn.close()
+        return jsonify(type=canonical, slug=slug, decisions=decisions)
+
+    @app.post("/api/types/<slug>/decisions")
+    def post_decision(slug):
+        """Record one decision (task 6.1). Body: `{scope, item_key, decision,
+        note}` -- `note` optional. Upserts on `triage_decisions`'
+        `(violation_type, scope, item_key)` UNIQUE constraint via
+        `mirror.triage.record`, so a second call for the same doorway or
+        block updates the existing row rather than duplicating it.
+
+        `role` is not read from the request: task 6.6 is what asks a viewer
+        for one and threads it through here. Until then `mirror.triage`
+        writes its own placeholder -- the column is `NOT NULL`, so something
+        has to be written, and writing a defensible placeholder in one place
+        (see `mirror.triage.PLACEHOLDER_ROLE`) is that something.
+
+        A malformed request (bad scope, missing item_key/decision) answers
+        400 from `mirror.triage.record`'s `ValueError` without touching the
+        database. Any other failure -- lost connection, constraint violation
+        this validation did not anticipate -- rolls back and answers 500 with
+        an `error` field rather than a 200 that silently did not persist:
+        task 6.4 ("state plainly when a decision could not be persisted")
+        needs a real failure response to react to, not a swallowed one.
+        """
+        canonical = _canonical_for_slug(slug)
+        if canonical is None:
+            return jsonify(error="untracked", slug=slug), 404
+        body = request.get_json(silent=True) or {}
+        conn = connect()
+        try:
+            try:
+                recorded = triage.record(
+                    conn, canonical,
+                    scope=body.get("scope"),
+                    item_key=body.get("item_key"),
+                    decision=body.get("decision"),
+                    note=body.get("note"),
+                )
+            except ValueError as exc:
+                conn.rollback()
+                return jsonify(error="invalid", detail=str(exc)), 400
+            except Exception:
+                conn.rollback()
+                return jsonify(error="persist_failed"), 500
+            conn.commit()
+        finally:
+            conn.close()
+        return jsonify(type=canonical, slug=slug, **recorded)
 
     return app
 

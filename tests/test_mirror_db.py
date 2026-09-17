@@ -1,6 +1,6 @@
 """The store itself: the load's resumability, and the derived parking view.
 
-These run against a throwaway `mirror_test` schema and skip when no database is
+These run against a throwaway `mirror_test_<pid>` schema and skip when no database is
 reachable. The source is a fixture in every case — nothing here goes to HRM.
 """
 

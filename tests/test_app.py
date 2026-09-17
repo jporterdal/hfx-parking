@@ -1,6 +1,6 @@
 """Task 5.1: the served application (`src/app/server.py`), exercised through
 Flask's test client end to end -- route -> `mirror.derive.derive` -> JSON --
-against a real connection to the throwaway `mirror_test` schema
+against a real connection to the throwaway `mirror_test_<pid>` schema
 `tests/conftest.py`'s `clean_db` fixture seeds and truncates. Nothing here
 mocks the derivation or the database, so a passing test is evidence the whole
 request path works, not that a handler is merely wired up.
@@ -22,6 +22,7 @@ import pytest
 
 from app import server as app_server
 from mirror import derive as mirror_derive
+from mirror import triage as mirror_triage
 
 pytestmark = pytest.mark.db
 
@@ -103,7 +104,7 @@ def client(clean_db):
     """A Flask test client whose every request opens a real connection to the
     same throwaway schema `clean_db` just truncated. `create_app()` is called
     with no override: `tests/conftest.py`'s `db` fixture has already pointed
-    `HFX_MIRROR_SCHEMA` at `mirror_test` for the whole session, and
+    `HFX_MIRROR_SCHEMA` at `mirror_test_<pid>` for the whole session, and
     `mirror.db.connect` (the factory `create_app` defaults to) reads that
     environment variable on every call -- so the app's own connections land in
     the same schema `clean_db` manipulates without this fixture having to
@@ -313,3 +314,194 @@ def test_doorways_and_blocks_endpoints_agree_on_the_type_they_scope_to(client, c
 
     assert door["type"] == block["type"] == app_server.DEFAULT_CANONICAL_TYPE
     assert door["slug"] == block["slug"] == app_server.DEFAULT_SLUG
+
+
+# --------------------------------------------------------- decisions API (6.1)
+#
+# design.md M6: "Decisions move to the store behind the application. All
+# viewers read and write the same rows." Task 6.1's own verify clause is that
+# a decision recorded by one viewer is visible to a second viewer of the same
+# type's list, so `test_a_decision_recorded_by_one_viewer_is_visible_to_a_second_viewer`
+# below is the deliverable, not a supporting check: it builds two independent
+# Flask apps (each its own `create_app()` call, each its own test client --
+# nothing shared between them but the real Postgres schema `clean_db` points
+# both at), posts a decision through one and reads it back through the other.
+
+
+def independent_client():
+    """A second, wholly separate Flask app and test client -- its own
+    `create_app()` call, sharing no Python object with any other client
+    except (through `mirror.db.connect`'s environment-variable DSN/schema)
+    the same underlying Postgres schema. Standing in for "a second viewer's
+    browser" the way the `client` fixture stands in for the first.
+    """
+    app = app_server.create_app()
+    app.testing = True
+    return app.test_client()
+
+
+def test_decisions_endpoint_starts_empty_for_a_type_with_no_decisions(client):
+    resp = client.get("/api/types/blocking-driveway/decisions")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["type"] == app_server.DEFAULT_CANONICAL_TYPE
+    assert data["slug"] == app_server.DEFAULT_SLUG
+    assert data["decisions"] == []
+
+
+def test_a_decision_recorded_by_one_viewer_is_visible_to_a_second_viewer(client, clean_db):
+    """The task's own verify clause. `client` posts a decision; a second,
+    independent client -- its own app, its own test client, never handed the
+    first client's response or any Python state -- reads it back through
+    GET /api/types/<slug>/decisions. The only channel between them is the
+    Postgres schema clean_db just truncated, which is exactly the channel
+    `design.md` M6 requires ("all viewers read and write the same rows").
+    """
+    second_viewer = independent_client()
+
+    posted = client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "doorway", "item_key": "1-first-st", "decision": "visit",
+              "note": "Needs a sign -- recorded by viewer one."},
+    )
+    assert posted.status_code == 200
+
+    seen = second_viewer.get("/api/types/blocking-driveway/decisions").get_json()
+
+    assert len(seen["decisions"]) == 1
+    entry = seen["decisions"][0]
+    assert entry["updated_at"] is not None
+    entry = {k: v for k, v in entry.items() if k != "updated_at"}
+    assert entry == {
+        "scope": "doorway", "item_key": "1-first-st", "decision": "visit",
+        "note": "Needs a sign -- recorded by viewer one.",
+        "role": mirror_triage.PLACEHOLDER_ROLE,
+    }
+
+
+def test_posting_the_same_item_twice_updates_in_place_rather_than_duplicating(client, clean_db):
+    first = client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "doorway", "item_key": "1-first-st", "decision": "visit", "note": "v1"},
+    ).get_json()
+    second = client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "doorway", "item_key": "1-first-st", "decision": "sched", "note": "v2"},
+    ).get_json()
+
+    data = client.get("/api/types/blocking-driveway/decisions").get_json()
+
+    assert len(data["decisions"]) == 1  # not two rows for the same doorway
+    assert data["decisions"][0]["decision"] == "sched"
+    assert data["decisions"][0]["note"] == "v2"
+    # The row's own updated_at moved between the two writes.
+    assert second["updated_at"] >= first["updated_at"]
+
+
+def test_doorway_and_block_decisions_with_the_same_item_key_do_not_collide(client, clean_db):
+    """The table's UNIQUE constraint is (violation_type, scope, item_key) --
+    scope is part of the key precisely so a doorway and a block that happen
+    to share key text (unlikely, but the two key spaces are unrelated
+    strings -- an address slug and a census block id) are still two rows,
+    not one clobbering the other.
+    """
+    client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "doorway", "item_key": "12090999", "decision": "visit"},
+    )
+    client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "block", "item_key": "12090999", "decision": "study"},
+    )
+
+    data = client.get("/api/types/blocking-driveway/decisions").get_json()
+    by_scope = {d["scope"]: d for d in data["decisions"]}
+
+    assert len(data["decisions"]) == 2
+    assert by_scope["doorway"]["decision"] == "visit"
+    assert by_scope["block"]["decision"] == "study"
+
+
+def test_a_decision_under_one_violation_type_does_not_appear_under_another(clean_db):
+    """`server.py` only routes one canonical type today (5.2's job to route
+    the rest), so this exercises the scoping `mirror.triage` itself provides
+    -- directly, at the persistence layer -- rather than through a second
+    HTTP route that does not exist yet. Task 6.1's scope note: "A decision on
+    one type's list must not appear on another's."
+    """
+    mirror_triage.record(clean_db, "Blocking Driveway", "doorway", "1-first-st", "visit")
+    clean_db.commit()
+
+    same_type = mirror_triage.list_for(clean_db, "Blocking Driveway")
+    other_type = mirror_triage.list_for(clean_db, "No Parking Sign")
+
+    assert len(same_type) == 1
+    assert other_type == []
+
+
+def test_decision_role_is_a_placeholder_pending_task_6_6(client, clean_db):
+    """Task 6.1's scope note: the `role` column is NOT NULL, so something
+    sane must be written even though role *selection* is task 6.6's, not
+    this one's. This just pins today's value so a change to the placeholder
+    is a deliberate edit, not an accident -- it is not a claim that
+    "unspecified" is the final word on what role means.
+    """
+    resp = client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "doorway", "item_key": "1-first-st", "decision": "visit"},
+    )
+
+    assert resp.get_json()["role"] == "unspecified" == mirror_triage.PLACEHOLDER_ROLE
+
+
+def test_decision_with_an_invalid_scope_is_rejected_not_silently_dropped(client, clean_db):
+    resp = client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "not-a-scope", "item_key": "1-first-st", "decision": "visit"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "invalid"
+    assert client.get("/api/types/blocking-driveway/decisions").get_json()["decisions"] == []
+
+
+def test_decision_missing_required_fields_is_rejected(client, clean_db):
+    for body in ({"scope": "doorway", "decision": "visit"},          # no item_key
+                  {"scope": "doorway", "item_key": "1-first-st"},    # no decision
+                  {}):
+        resp = client.post("/api/types/blocking-driveway/decisions", json=body)
+        assert resp.status_code == 400
+
+
+def test_decisions_endpoints_404_for_an_untracked_slug(client):
+    resp = client.get("/api/types/no-parking-sign/decisions")
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "untracked"
+
+    resp = client.post(
+        "/api/types/no-parking-sign/decisions",
+        json={"scope": "doorway", "item_key": "x", "decision": "visit"},
+    )
+    assert resp.status_code == 404
+
+
+def test_index_page_persists_decisions_through_the_server_not_local_storage_only(client):
+    """A page-shape check, not an end-to-end browser test: the served page's
+    script must call the new shared-storage endpoints from its boot and save
+    paths, so a decision recorded in one browser is not silently confined to
+    that browser's localStorage (the pre-6.1 defect design.md M6 and
+    proposal.md describe). `test_index_served_at_root_with_no_auth_and_no_build_step`
+    already checks the page has no build step; this checks the specific
+    strings that wire triage to the server.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert "/api/types/${DEFAULT_SLUG}/decisions" in body
+    assert "loadDecisions" in body
+    assert "saveDecision" in body
+    # The pre-6.1 fallback is still present (6.3 removes it), just not the
+    # active path any more.
+    assert "loadLocal" in body
+    assert "saveLocal" in body
+    assert 'useCap("db")' in body
