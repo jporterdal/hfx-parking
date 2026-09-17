@@ -1,0 +1,23 @@
+"""Production entry point for the served application (task 5.1).
+
+    PORT=8000 HFX_MIRROR_DSN=postgresql://... venv/bin/gunicorn wsgi:app --bind 0.0.0.0:$PORT
+
+`gunicorn` imports this file as a module and looks up the `app` attribute --
+the ordinary WSGI-callable pattern, not the `module:factory()` expression
+form, so no extra gunicorn flag is needed. `PORT` is read here only to build
+the bind address gunicorn is told to use in the command above; gunicorn itself
+does not read `PORT`. `HFX_MIRROR_DSN` reaches `mirror.db.connect` unchanged
+(`src/mirror/db.py:dsn()`). Nothing in this file names a host (design.md M12).
+
+For a quick local check without gunicorn in the loop, `python3 src/app/server.py`
+runs the Flask development server against the same `PORT`/`HFX_MIRROR_DSN`.
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
+
+from app.server import create_app  # noqa: E402
+
+app = create_app()

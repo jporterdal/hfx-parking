@@ -269,6 +269,33 @@ CREATE TABLE IF NOT EXISTS block_list_history (
 CREATE INDEX IF NOT EXISTS block_list_history_block_idx
     ON block_list_history (block);
 
+-- Filter-independent figures per canonical type -- per-type conclusions (recurrence,
+-- the tow effect bound, vehicle uniqueness), response time and call denominators --
+-- computed once per published mirror version rather than once per request (task 5.7,
+-- design.md M12: "figures that do not depend on filters are computed when the mirror
+-- reloads"). `mirror_version` carries the same version identity `list_snapshots.
+-- mirror_version` already does (`history._mirror_version`'s {layer: source_last_edit}
+-- map), so a row states plainly which published version of the mirror it was
+-- computed from. `parameters` folds in the bootstrap seed and iteration count
+-- alongside the derivation thresholds, so two runs under different parameters (or a
+-- coarser bootstrap) land as distinct rows rather than overwriting one another, and
+-- the uniqueness constraint below -- on (mirror_version, canonical_type, parameters)
+-- together -- is what makes re-running the compute-and-store command against a
+-- version it has already covered a no-op rather than a duplicate.
+CREATE TABLE IF NOT EXISTS type_figures (
+    id             bigserial PRIMARY KEY,
+    sync_run_id    bigint REFERENCES sync_runs (id),
+    canonical_type text NOT NULL,
+    mirror_version jsonb NOT NULL,
+    parameters     jsonb NOT NULL DEFAULT '{}'::jsonb,
+    figures        jsonb NOT NULL,
+    computed_at    timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (mirror_version, canonical_type, parameters)
+);
+
+CREATE INDEX IF NOT EXISTS type_figures_type_computed_idx
+    ON type_figures (canonical_type, computed_at DESC);
+
 -- Shared triage. A role identifies; it does not authenticate.
 CREATE TABLE IF NOT EXISTS triage_decisions (
     id             bigserial PRIMARY KEY,

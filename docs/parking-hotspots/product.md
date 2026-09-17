@@ -1,7 +1,11 @@
 # Doorways enforcement cannot fix
 
 Status: Final.
-Date: 2026-09-12.
+Date: 2026-09-12; figures below refreshed 2026-09-16 from the local mirror. Regenerate with
+`python -m mirror.figures --violation Driveway` (tow comparison, effect bound) and
+`python src/mirror/derive.py <dir> --violation Driveway` (vehicle uniqueness). The dropped-window
+figures under "What was tested and dropped" are a one-off measurement from 2026-09-12 against code
+that no longer exists in this repository and are marked accordingly below.
 
 ## The problem in one line
 
@@ -16,14 +20,19 @@ Enforcement cannot fix these addresses, and the data proves it two ways.
 | Group | Calls | Recur within 365 days |
 |-------|------:|----------------------:|
 | Vehicle was towed | 445 | 44.7% |
-| Not towed | 9,206 | 44.6% |
+| Not towed | 9,249 | 44.7% |
 
-The difference is 0.1 points.
-The data rules out any effect larger than about 5 points.
+(Calls matching `violation='Driveway'` with a usable address and `DATE_INITIATED`, 9,698 total; 4
+calls of unknown tow status excluded above.)
+
+The two round to the same number today.
+A cluster bootstrap resampled by doorway (95 per cent interval) rules out a reduction larger than
+about 5.1 points. The comparison is observational: tows may cluster at the addresses already calling
+the most, which could mask a real effect in either direction.
 
 **It is a different car every time.**
 
-Across the 363 doorways still calling, 2,473 distinct vehicles produced 2,588 calls.
+Across the 351 doorways still calling, 2,413 distinct vehicles produced 2,528 calls.
 That is 96 per cent unique.
 28 Queen St has 58 calls and 58 different vehicles, with no vehicle appearing twice.
 
@@ -43,11 +52,15 @@ It does not go to an officer's shift plan.
 
 ## What was tested and dropped
 
+Historical, 2026-09-12. The comparison code behind the four bullets below (the matched-null baseline
+and the per-address tuning) no longer exists in this repository; these figures are not reproduced by
+current code and are recorded here as a dated finding, not a reproducible one.
+
 An earlier version ranked each doorway by the four-hour window holding most of its calls, against a 17 per cent baseline.
 That is wrong and it is worth saying why, because most teams will build it.
 
 - 4 divided by 24 is not the right null. Calls are not spread evenly over the day.
-- 85 per cent of these calls arrive on the `INTERNAL` channel, which records 4 calls out of 8,345 between 21:00 and 07:00, Halifax local time, and peaks at 13:00. The citizen-typed `311 Online` channel spreads across nearly all 24 hours and peaks at 18:00. The timestamp is when staff keyed the call, not when the driveway was blocked.
+- 85 per cent of these calls arrive on the `INTERNAL` channel, which records 4 calls out of 8,345 between 21:00 and 07:00, Halifax local time, and peaks at 13:00. The citizen-typed `311 Online` channel spreads across nearly all 24 hours and peaks at 18:00. The timestamp is when staff keyed the call, not when the driveway was blocked. (This bullet is current — regenerate with `scripts/hour_of_day_figures.py`.)
 - Against a matched null, the observed 58.9 per cent sits against a null mean of 48.8 per cent, and only 17 of 58 addresses beat their own 95th percentile.
 - Out of sample, a per-address tuned window scores 47.5 per cent against 41.7 per cent for one city-wide window. Weekday tuning actually loses to a city-wide block, 35.7 against 37.9.
 
@@ -102,6 +115,6 @@ Tows may cluster at the worst addresses, which would hide a real effect.
 
 ## Next steps
 
-1. Run the same job for the other violation types. "No Parking Sign" is 27,302 calls and is bigger than blocked driveways.
+1. Run the same job for the other violation types. "No Parking Sign" is 27,404 calls and is bigger than blocked driveways.
 2. Geocode with LATITUDE and LONGITUDE instead of address strings.
 3. Measure the effect. Pick 20 addresses, install a physical fix, and compare their call rate to 20 matched addresses left alone.

@@ -1,0 +1,1102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Halifax Doorway Triage</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --ground:#f3f5f3; --surface:#ffffff; --surface-2:#ecefec;
+  --ink:#16191b; --ink-2:#3d474a; --muted:#5d6a63; --line:#dde2de; --line-2:#c8d0ca;
+  --accent:#1a6b46; --accent-soft:#e4efe8;
+  --alert:#a8481a; --alert-soft:#f7e7dd;
+  --hazard:#e0ab0a;
+  --shadow:0 1px 2px rgba(16,32,24,.06),0 6px 16px -10px rgba(16,32,24,.18);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#131618; --surface:#1b1f22; --surface-2:#23282c;
+  --ink:#e8ebe8; --ink-2:#b9c2bc; --muted:#8b978f; --line:#2b3135; --line-2:#3b4348;
+  --accent:#5cbe8c; --accent-soft:#1a2f24;
+  --alert:#e08a5a; --alert-soft:#33211a;
+  --hazard:#e0ab0a;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 18px -10px rgba(0,0,0,.6);
+}}
+:root[data-theme="dark"]{
+  --ground:#131618; --surface:#1b1f22; --surface-2:#23282c;
+  --ink:#e8ebe8; --ink-2:#b9c2bc; --muted:#8b978f; --line:#2b3135; --line-2:#3b4348;
+  --accent:#5cbe8c; --accent-soft:#1a2f24;
+  --alert:#e08a5a; --alert-soft:#33211a;
+  --hazard:#e0ab0a;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 18px -10px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);
+  font-family:"Source Sans 3",ui-sans-serif,system-ui,sans-serif;font-size:15px;line-height:1.5;
+  -webkit-font-smoothing:antialiased}
+.hazard{height:5px;background:repeating-linear-gradient(135deg,var(--hazard) 0 10px,#1a1a16 10px 20px)}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px 72px}
+
+header{padding:30px 0 22px;border-bottom:1px solid var(--line)}
+.eyebrow{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+h1{font-family:"Barlow Condensed","Arial Narrow",sans-serif;font-weight:700;font-size:clamp(34px,6vw,58px);
+  line-height:.95;letter-spacing:-.01em;margin:0 0 12px;text-wrap:balance}
+.thesis{max-width:62ch;font-size:17px;color:var(--ink-2);margin:0 0 22px}
+.thesis b{color:var(--ink);font-weight:600}
+.stats{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--line);border-radius:3px;
+  background:var(--surface);overflow:hidden;width:fit-content;max-width:100%}
+.stat{padding:11px 20px;border-right:1px solid var(--line)}
+.stat:last-child{border-right:0}
+.stat .n{font-family:"Barlow Condensed",sans-serif;font-weight:700;font-size:27px;line-height:1;
+  font-variant-numeric:tabular-nums;display:block}
+.stat .k{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);margin-top:5px;display:block}
+
+.panels{display:grid;grid-template-columns:minmax(0,1fr) 316px;gap:26px;margin-top:26px;align-items:start}
+@media (max-width:900px){.panels{grid-template-columns:1fr}}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:3px;box-shadow:var(--shadow)}
+.card>h2{font-family:"Barlow Condensed",sans-serif;font-weight:600;font-size:15px;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--muted);margin:0;padding:12px 16px;border-bottom:1px solid var(--line)}
+.card .body{padding:14px 16px}
+
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 0 4px}
+.seg{display:flex;border:1px solid var(--line-2);border-radius:3px;overflow:hidden;background:var(--surface)}
+.seg button{font:inherit;font-size:13px;padding:6px 11px;border:0;border-right:1px solid var(--line);
+  background:transparent;color:var(--ink-2);cursor:pointer}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff;font-weight:600}
+.seg button:hover:not([aria-pressed="true"]){background:var(--surface-2)}
+.count{font-family:"JetBrains Mono",monospace;font-size:11px;opacity:.72;margin-left:5px}
+select,input[type=search]{font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line-2);
+  border-radius:3px;background:var(--surface);color:var(--ink)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.dcols{display:flex;flex-wrap:wrap;gap:6px}
+.dchip{font:inherit;font-size:12px;font-family:"JetBrains Mono",monospace;padding:4px 8px;cursor:pointer;
+  border:1px solid var(--line-2);border-radius:3px;background:var(--surface);color:var(--ink-2)}
+.dchip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+
+svg.map{display:block;width:100%;height:auto}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-top:10px}
+.legend span{display:flex;align-items:center;gap:5px}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+
+.rows{margin-top:22px;border:1px solid var(--line);border-radius:3px;background:var(--surface);
+  overflow:hidden;box-shadow:var(--shadow)}
+.rhead,.row{display:grid;grid-template-columns:1.7fr 62px 96px 56px 96px 64px 92px 128px;gap:10px;
+  align-items:center;padding:9px 15px}
+.rhead{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);background:var(--surface-2);border-bottom:1px solid var(--line)}
+.row{border-bottom:1px solid var(--line);cursor:pointer;background:transparent;width:100%;border-left:0;
+  border-right:0;border-top:0;font:inherit;color:inherit;text-align:left}
+.row:hover{background:var(--surface-2)}
+.row .addr{font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .sub{font-size:12px;color:var(--muted)}
+.num{font-family:"JetBrains Mono",monospace;font-variant-numeric:tabular-nums;font-size:13px;text-align:right}
+.bar{height:6px;background:var(--surface-2);border-radius:2px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.pill{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  padding:3px 7px;border-radius:2px;border:1px solid var(--line-2);color:var(--muted);white-space:nowrap;
+  display:inline-block}
+.pill.visit{background:var(--alert-soft);border-color:var(--alert);color:var(--alert);font-weight:600}
+.pill.sched{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+.pill.none{opacity:.62}
+@media (max-width:860px){
+  .rhead{display:none}
+  .row{grid-template-columns:1fr auto;gap:6px 12px}
+  .row .hideS{display:none}
+}
+.detail{padding:16px 15px 20px;background:var(--surface-2);border-bottom:1px solid var(--line)}
+.ev{max-width:68ch;margin:0 0 14px;color:var(--ink-2)}
+.ev b{color:var(--ink)}
+.acts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.btn{font:inherit;font-size:13px;padding:7px 13px;border:1px solid var(--line-2);border-radius:3px;
+  background:var(--surface);color:var(--ink);cursor:pointer;text-decoration:none;display:inline-block}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.btn.on.warn{background:var(--alert);border-color:var(--alert)}
+.btn.link{border-style:dashed}
+textarea{font:inherit;font-size:14px;width:100%;max-width:68ch;min-height:62px;padding:9px 11px;
+  border:1px solid var(--line-2);border-radius:3px;background:var(--surface);color:var(--ink);resize:vertical}
+.meta{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--muted);margin-top:8px}
+.advice{max-width:68ch;margin-top:12px;padding:11px 13px;border-left:3px solid var(--hazard);
+  background:var(--surface);font-size:14px;color:var(--ink-2);white-space:pre-wrap}
+footer{margin-top:34px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--muted);
+  max-width:74ch}
+footer a{color:var(--accent)}
+footer h3{font-family:"Barlow Condensed",sans-serif;font-size:14px;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--ink-2);margin:16px 0 6px}
+.banner{margin-top:14px;padding:9px 13px;border:1px dashed var(--line-2);border-radius:3px;font-size:13px;
+  color:var(--muted);background:var(--surface)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* ---- map ---- */
+.mapwrap{position:relative;background:var(--surface-2);border-radius:2px;overflow:hidden;
+  height:clamp(340px,52vh,560px);touch-action:none;cursor:grab}
+.mapwrap.drag{cursor:grabbing}
+canvas#cv{display:block;width:100%;height:100%}
+.mapui{position:absolute;top:10px;right:10px;display:flex;flex-direction:column;gap:5px}
+.mapui button{width:32px;height:32px;font:inherit;font-size:17px;line-height:1;border:1px solid var(--line-2);
+  background:var(--surface);color:var(--ink);border-radius:3px;cursor:pointer;display:grid;place-items:center;
+  box-shadow:var(--shadow)}
+.mapui button:hover{border-color:var(--accent);color:var(--accent)}
+.mapui button.wide{width:auto;height:auto;padding:5px 9px;font-size:11px;
+  font-family:"JetBrains Mono",monospace;letter-spacing:.04em}
+.mapcap{position:absolute;left:10px;bottom:10px;font-family:"JetBrains Mono",monospace;font-size:10px;
+  color:var(--muted);background:color-mix(in srgb,var(--surface) 84%,transparent);padding:4px 8px;
+  border-radius:2px;pointer-events:none;max-width:62%}
+.scale{position:absolute;right:10px;bottom:10px;font-family:"JetBrains Mono",monospace;font-size:10px;
+  color:var(--muted);pointer-events:none;text-align:center}
+.scale i{display:block;height:4px;border:1px solid var(--muted);border-top:0;margin-top:2px}
+.hit{position:absolute;pointer-events:none;font-family:"JetBrains Mono",monospace;font-size:11px;
+  background:var(--ink);color:var(--ground);padding:4px 7px;border-radius:2px;white-space:nowrap;
+  transform:translate(-50%,-160%);opacity:0;transition:opacity .12s}
+.hit.on{opacity:1}
+.modebar{display:flex;gap:0;border:1px solid var(--line-2);border-radius:3px;overflow:hidden;
+  background:var(--surface);width:fit-content;margin:0 0 4px}
+.modebar button{font:inherit;font-family:"Barlow Condensed",sans-serif;font-weight:600;font-size:15px;
+  letter-spacing:.04em;text-transform:uppercase;padding:8px 16px;border:0;border-right:1px solid var(--line);
+  background:transparent;color:var(--ink-2);cursor:pointer}
+.modebar button:last-child{border-right:0}
+.modebar button[aria-pressed="true"]{background:var(--ink);color:var(--ground)}
+.blockrow{display:grid;grid-template-columns:1.9fr 66px 74px 66px 56px 86px 108px 128px;gap:10px}
+.addrlist{display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 14px}
+.addrlist button{font:inherit;font-family:"JetBrains Mono",monospace;font-size:11px;padding:3px 7px;
+  border:1px solid var(--line-2);border-radius:2px;background:var(--surface);color:var(--ink-2);cursor:pointer}
+.addrlist button:hover{border-color:var(--accent);color:var(--accent)}
+.flag{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--alert);font-weight:600}
+@media (max-width:860px){.blockrow{grid-template-columns:1fr auto}}
+</style>
+
+<style>
+  html{color-scheme:light dark}
+  body{margin:0}
+  img{max-width:100%}
+  [hidden]{display:none!important}
+  /* Workspace layout: retain the existing visual language and data. */
+  .wrap{max-width:1520px;padding-bottom:48px}
+  header{padding:22px 0 18px}
+  .intro{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px 32px;align-items:start}
+  h1{font-size:clamp(34px,4vw,48px)}
+  .research{margin-top:12px;max-width:74ch}
+  .research summary{cursor:pointer;color:var(--ink-2);font-size:14px;width:fit-content}
+  .research .thesis{font-size:15px;margin:12px 0 0}
+  .stat{padding:10px 14px}
+  .banner{margin-top:16px}
+  .toolbar{margin:18px 0;display:grid;gap:12px}
+  .toolbar-top{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
+  .modebar{margin:0}
+  .toolbar-top input{flex:1;min-width:180px;max-width:300px}
+  .district-filter{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .filter-label{font-family:"Barlow Condensed",sans-serif;font-size:15px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+  .controls{padding:0;gap:12px}
+  .seg{flex-wrap:wrap}
+  .workspace{display:grid;grid-template-columns:minmax(240px,var(--map-width,55fr)) 20px minmax(280px,45fr);gap:0;align-items:start}
+  .splitter{position:sticky;top:16px;height:clamp(340px,56vh,580px);width:20px;border:0;background:transparent;cursor:col-resize;touch-action:none;display:grid;place-items:center;padding:0}
+  .splitter::after{content:"";width:4px;height:44px;border-radius:3px;background:var(--line-2)}
+  .splitter:hover::after,.splitter:focus-visible::after{background:var(--accent)}
+  body.resizing{cursor:col-resize;user-select:none}
+  .map-panel{position:sticky;top:16px}
+  .mapwrap{height:clamp(340px,56vh,580px)}
+  .map-notes{padding:12px 16px}
+  .map-notes .meta{margin:0}
+  .rows{margin-top:0;min-width:0;overflow-x:auto}
+  .rhead,.row{min-width:800px}
+  .rhead,.row{grid-template-columns:minmax(150px,1fr) 45px 64px 44px 64px 42px 60px 126px;gap:8px;padding:10px 12px}
+  .rhead.blockrow,.row.blockrow{grid-template-columns:minmax(150px,1fr) 50px 64px 44px 38px 65px 70px 170px}
+  .rhead .num{font-size:10px}
+  .row[aria-expanded="true"]{background:var(--accent-soft);box-shadow:inset 3px 0 var(--accent)}
+  .empty{padding:28px 16px;color:var(--muted);margin:0}
+  @media(max-width:1250px){
+    .intro{grid-template-columns:1fr}
+    .rows{overflow-x:auto}
+    .rhead,.row{min-width:800px}
+    .detail{min-width:0}
+  }
+  @media(min-width:769px) and (max-width:860px){
+    .rhead,.rhead.blockrow{display:grid}
+    .row .hideS{display:block}
+  }
+  @media(max-width:768px){
+    .workspace{grid-template-columns:1fr}
+    .splitter{display:none}
+    .map-panel{position:static}
+    .rows{overflow:hidden}
+    .rhead,.row{min-width:0}
+    .wrap{padding-left:14px;padding-right:14px}
+    .rhead,.rhead.blockrow{display:none}
+    .row,.row.blockrow{grid-template-columns:minmax(0,1fr) auto}
+    .row .addr{white-space:normal}
+    .pill{white-space:normal;max-width:150px}
+    .stats{width:100%;display:grid;grid-template-columns:1fr 1fr}
+    .stat:nth-child(2){border-right:0}
+    .stat:nth-child(-n+2){border-bottom:1px solid var(--line)}
+    .toolbar-top select,.toolbar-top input{max-width:none;min-width:0;width:100%;flex:auto}
+    .seg button{flex:1 1 auto}
+    .mapwrap{height:260px}
+  }
+  .toolbar-top{gap:16px}
+  .toolbar-top input[type=search]{max-width:none;height:38px}
+  .toolbar-top .district-filter{align-items:center;gap:8px;margin-left:auto}
+  #district{height:38px;min-width:205px}
+  .controls{border-bottom:1px solid var(--line);justify-content:space-between;gap:8px}
+  .status-tabs{display:flex;gap:20px;flex-wrap:wrap}
+  .status-tabs button{font:inherit;font-size:14px;cursor:pointer;color:var(--muted);background:none;border:0;border-bottom:2px solid transparent;padding:10px 0}
+  .status-tabs button[aria-pressed="true"]{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+  .status-tabs button:hover{color:var(--ink)}
+  .clear-filters{font:inherit;font-size:13px;background:none;border:0;color:var(--muted);cursor:pointer;padding:8px 0;text-decoration:underline}
+  .table-panel{min-width:0}
+  .table-tools{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;min-height:38px}
+  .table-tools .count{margin-left:0}
+  .table-tools label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);min-width:0;max-width:100%;white-space:nowrap}
+  .table-tools select{min-width:0;max-width:230px;flex:1;width:auto}
+  select{appearance:none;padding-right:36px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%238b978f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
+  @media(forced-colors:active){select{appearance:auto;background-image:none}}
+  .mobile-status{display:none}
+  @media(max-width:768px){
+    .toolbar-top .district-filter{width:100%;margin:0;flex-wrap:nowrap}
+    .toolbar-top #district{width:auto;flex:1;min-width:0}
+    .status-tabs{display:none}
+    .mobile-status{display:flex;align-items:center;gap:12px;font-size:14px;flex:1}
+    .mobile-status select{min-width:0;flex:1}
+    .controls{padding-bottom:12px}
+    .table-panel{margin-top:16px}
+  }
+</style>
+</head>
+<body>
+<div class="hazard"></div>
+<div class="wrap">
+<header>
+  <p class="eyebrow">Halifax Regional Municipality &middot; blocked driveway service requests &middot; open data to <span id="latest-date">&hellip;</span></p>
+  <div class="intro">
+  <div>
+  <h1>Blocks, not doorways</h1>
+  <details class="research">
+  <summary>Why blocks? Read the analysis</summary>
+  <p class="thesis">A tow does not lower the chance a doorway calls again: <b>44.7 per cent against 44.6 per cent</b>.
+  Across these addresses <b><span id="distinct-count">&hellip;</span> of <span id="seen-count">&hellip;</span> recorded vehicles were different cars</b>. There is no repeat offender to
+  deter, so the street is producing the violation. And <b><span id="with-neighbour-count">&hellip;</span> of the <span id="n-doorways-thesis">&hellip;</span> doorways sit on a block where a neighbour is
+  also still calling</b>, which means most of these are not a sign at one address. They are one block-wide problem
+  counted many times.</p>
+  </details>
+  </div>
+  <div class="stats">
+    <div class="stat"><span class="n" id="n-doorways-stat">&hellip;</span><span class="k">doorways still calling</span></div>
+    <div class="stat"><span class="n" id="n-blocks-stat">&hellip;</span><span class="k">blocks with 2+ calling</span></div>
+    <div class="stat"><span class="n" id="tow-pct-stat">&hellip;</span><span class="k">ended in a tow</span></div>
+    <div class="stat"><span class="n" id="unique-pct-stat">&hellip;</span><span class="k">of vehicles unique</span></div>
+  </div>
+  </div>
+  <div class="banner" id="dbstate" role="status" hidden></div>
+</header>
+
+<section class="toolbar" aria-label="Filter map and list">
+  <div class="toolbar-top">
+    <div class="modebar" id="modebar">
+      <button type="button" data-mode="block">By block</button>
+      <button type="button" data-mode="door">By doorway</button>
+    </div>
+    <input type="search" id="q" placeholder="Find a street" aria-label="Find a street">
+    <label class="district-filter" for="district"><span class="filter-label">District</span>
+      <select id="district"></select>
+    </label>
+  </div>
+  <div class="controls">
+    <div class="status-tabs" id="statusfilter" aria-label="Filter by status"></div>
+    <label class="mobile-status" for="status-select">Status <select id="status-select"></select></label>
+    <button type="button" class="clear-filters" id="clear-filters" hidden>Clear filters</button>
+  </div>
+</section>
+
+<div class="workspace">
+  <section class="card map-panel">
+    <h2 id="maptitle">Halifax street network</h2>
+    <div class="body" style="padding:0">
+      <div class="mapwrap" id="mapwrap">
+        <canvas id="cv"></canvas>
+        <div class="mapui">
+          <button id="zin" title="Zoom in" aria-label="Zoom in">+</button>
+          <button id="zout" title="Zoom out" aria-label="Zoom out">&minus;</button>
+          <button id="zfit" class="wide" title="Fit everything">fit</button>
+          <button id="zpen" class="wide" title="Zoom to the Halifax peninsula">pen</button>
+        </div>
+        <p class="mapcap" id="mapcap">Drag to pan, scroll or pinch to zoom, click a dot to open it.</p>
+        <div class="scale" id="scalebar">100 m<i></i></div>
+        <div class="hit" id="hit"></div>
+      </div>
+    </div>
+    <div class="map-notes">
+      <p class="meta" id="dsel">All districts</p>
+      <div class="legend" style="margin-top:14px">
+        <span><i class="dot" style="background:var(--hazard)"></i>Not triaged</span>
+        <span><i class="dot" style="background:var(--alert)"></i>Needs a site visit</span>
+        <span><i class="dot" style="background:var(--accent)"></i>Fix scheduled</span>
+        <span><i class="dot" style="background:var(--line-2)"></i>No action needed</span>
+      </div>
+    </div>
+  </section>
+  <button type="button" class="splitter" id="panel-resize" role="separator" aria-label="Resize map and table panels" aria-orientation="vertical" aria-valuemin="20" aria-valuemax="80" aria-valuenow="55" title="Drag to resize · Arrow keys to adjust · Double-click to reset"></button>
+
+<section class="table-panel" aria-label="Triage results">
+  <div class="table-tools">
+    <span class="count" id="showing" aria-live="polite"></span>
+    <label for="sort">Sort by <select id="sort" aria-label="Sort the list"></select></label>
+  </div>
+<div class="rows">
+  <div class="rhead" id="rhead"></div>
+  <div id="list"></div>
+</div>
+</section>
+</div>
+
+<footer>
+  <h3>Why blocks</h3>
+  <p>One doorway calling on its own wants a bollard or a driveway marking. A block where nine doorways are all still
+  calling is one problem, not nine, and nine signs is the wrong answer to it. Blocks here are HRM's Census 2021
+  Dissemination Areas, which carry a dwelling count, so a block's load is shown per 1,000 dwellings as well as raw.
+  Dense blocks call more; the rate is what separates a real problem from a lot of front doors.</p>
+  <p>Three coarser groupings were tried and thrown out. The <em>community</em> field on the call record is useless:
+  7,651 of 9,791 driveway calls just say HALIFAX. HRM's Community Boundaries layer fails the same way. Community Plan
+  Areas has only 22 polygons for the whole municipality.</p>
+  <h3>The map</h3>
+  <p>Drawn from HRM's own Street Network layer, 10,599 street segments, and from the census block outlines. It is
+  vector, not tiles, so it works with no external service and zooms without pixelating. Street names appear as you
+  zoom in.</p>
+  <h3>Read these numbers carefully</h3>
+  <p>HRM publishes no ticketing field. A tow is the only enforcement outcome in the data, so a call with no tow is a
+  call with <em>no recorded outcome</em>, not proof that nothing happened. The tow comparison is observational: tows
+  may cluster at the worst addresses, which would hide a real effect. Vehicle identity is make, model and colour, not
+  a plate, so two identical cars count as one and the unique count is a floor. Addresses are matched as text, not
+  geocoded, so one doorway can split across two rows. A block's street label is derived from the doorways on this
+  list, not from an official name, and its dwelling count covers the whole block rather than the street the calls sit
+  on.</p>
+  <h3>Source</h3>
+  <p>HRM Open Data, <a href="https://data-hrm.hub.arcgis.com" target="_blank" rel="noopener">data-hrm.hub.arcgis.com</a>.
+  Regenerated from the live service, not from a stored export.</p>
+</footer>
+</div>
+<script>
+/* Task 5.1 (mirror-hrm-data-and-host-app): this page is evolved from
+ * web/template.html, which src/hotspots.py's write_board() still fills by
+ * substituting __MAP__/__DATA__ at generation time -- that path is untouched.
+ * Here the same two values are fetched from this server's JSON API instead of
+ * being embedded, which is the only structural change from the template:
+ * everything below this boot() wrapper is template.html's script unmodified.
+ * DEFAULT_SLUG names the one type this page serves; 5.2 is what turns it into
+ * a routed choice. */
+const DEFAULT_SLUG = "blocking-driveway";
+
+async function boot(){
+const banner = document.getElementById("dbstate");
+const showBanner = msg => { banner.textContent = msg; banner.hidden = !msg; };
+
+let mapRes, doorRes, blockRes;
+try{
+  [mapRes, doorRes, blockRes] = await Promise.all([
+    fetch("/map-network.json"),
+    fetch(`/api/types/${DEFAULT_SLUG}/doorways`),
+    fetch(`/api/types/${DEFAULT_SLUG}/blocks`),
+  ]);
+}catch(e){
+  showBanner("Could not reach the server. Check your connection and reload.");
+  throw e;
+}
+if (!mapRes.ok || !doorRes.ok || !blockRes.ok){
+  showBanner("The server could not produce this list just now. Reload to try again.");
+  throw new Error(`load failed: map ${mapRes.status}, doorways ${doorRes.status}, blocks ${blockRes.status}`);
+}
+const MAP = await mapRes.json();
+const doorPayload = await doorRes.json();
+const blockPayload = await blockRes.json();
+const DATA = {rows: doorPayload.rows, blocks: blockPayload.blocks};
+const ROWS = DATA.rows, BLOCKS = DATA.blocks;
+
+/* Header figures the template used to have write_board() bake into the page
+ * text at generation time (__LATEST__, __N_DOORWAYS__, ...). Same numbers, now
+ * read from what the API just returned instead of from a filled placeholder. */
+(() => {
+  const s = doorPayload.summary || {};
+  const set = (id, val) => { const n = document.getElementById(id); if (n) n.textContent = val; };
+  set("latest-date", doorPayload.latest || "unknown");
+  set("n-doorways-thesis", doorPayload.count.toLocaleString());
+  set("n-doorways-stat", doorPayload.count.toLocaleString());
+  set("n-blocks-stat", blockPayload.count.toLocaleString());
+  set("distinct-count", (s.distinct ?? 0).toLocaleString());
+  set("seen-count", (s.seen ?? 0).toLocaleString());
+  set("with-neighbour-count", (s.with_neighbour ?? 0).toLocaleString());
+  set("tow-pct-stat", s.tow_pct == null ? "-" : `${s.tow_pct.toFixed(1)}%`);
+  set("unique-pct-stat", s.unique_pct == null ? "-" : `${s.unique_pct}%`);
+})();
+
+const R = 6378137;
+
+/* ---------- status vocabularies ---------- */
+const DOOR_ST = {
+  none_:{label:"Not triaged", pill:""},
+  visit:{label:"Needs a site visit", pill:"visit"},
+  sched:{label:"Fix scheduled", pill:"sched"},
+  noact:{label:"No action needed", pill:"none"}
+};
+const BLOCK_ST = {
+  none_:{label:"Not triaged", pill:""},
+  study:{label:"Needs a parking study", pill:"visit"},
+  sched:{label:"Block measure scheduled", pill:"sched"},
+  noact:{label:"No action needed", pill:"none"}
+};
+const COLOR = {none_:"#e0ab0a", visit:"#b3541e", study:"#b3541e", sched:"#1a7d52", noact:"#9aa5a0"};
+
+let DEC = {}, db = null, sampler = null;
+const LS_KEY = "halifax-triage-decisions";
+function loadLocal(){
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch(e){ return {}; }
+}
+function saveLocal(){
+  try { localStorage.setItem(LS_KEY, JSON.stringify(DEC)); } catch(e){ /* private window */ }
+}
+let mode = "block", openKey = null, selected = null;
+let f = {district:null, status:"all", sort:"n", q:""};
+
+const el = id => document.getElementById(id);
+const workspace = document.querySelector(".workspace");
+const splitter = el("panel-resize");
+let panelRatio = .55;
+function sizePanels(ratio){
+  const available = workspace.clientWidth - 20;
+  if (available <= 0 || window.innerWidth <= 768) return;
+  const min = Math.max(.2,240/available), max = Math.min(.8,1-280/available);
+  panelRatio = Math.max(min,Math.min(max,ratio));
+  workspace.style.setProperty("--map-width", `${available*panelRatio}px`);
+  splitter.setAttribute("aria-valuemin",Math.round(min*100));
+  splitter.setAttribute("aria-valuemax",Math.round(max*100));
+  splitter.setAttribute("aria-valuenow",Math.round(panelRatio*100));
+  splitter.setAttribute("aria-valuetext",`Map ${Math.round(panelRatio*100)} percent`);
+}
+splitter.onpointerdown = e => {
+  if(e.button !== 0) return;
+  e.preventDefault(); splitter.focus(); splitter.setPointerCapture(e.pointerId);
+  document.body.classList.add("resizing");
+};
+splitter.onpointermove = e => {
+  if(!splitter.hasPointerCapture(e.pointerId)) return;
+  sizePanels((e.clientX-workspace.getBoundingClientRect().left-10)/(workspace.clientWidth-20));
+};
+const endResize = () => document.body.classList.remove("resizing");
+splitter.onpointerup = e => {if(splitter.hasPointerCapture(e.pointerId)) splitter.releasePointerCapture(e.pointerId);endResize();};
+splitter.onpointercancel = endResize;
+splitter.onlostpointercapture = endResize;
+splitter.ondblclick = () => sizePanels(.55);
+splitter.onkeydown = e => {
+  if(!["ArrowLeft","ArrowRight","Home","End"].includes(e.key)) return;
+  e.preventDefault();
+  sizePanels(e.key==="Home"?0:e.key==="End"?1:panelRatio+(e.key==="ArrowLeft"?-.03:.03));
+};
+new ResizeObserver(()=>sizePanels(panelRatio)).observe(workspace);
+const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+ROWS.forEach(r => r.key = "d:" + slug(r.a));
+BLOCKS.forEach(b => b.key = "b:" + b.bk);
+const BY_ADDR = new Map(ROWS.map(r => [r.a, r]));
+const BY_BLOCK = new Map(BLOCKS.map(b => [b.bk, b]));
+const st = k => (DEC[k] && DEC[k].status) || "none_";
+const VOCAB = () => mode === "block" ? BLOCK_ST : DOOR_ST;
+
+/* ---------- decode the map payload ---------- */
+const Q = MAP.q;
+function decode(flat, from){
+  const pts = []; let x = flat[from], y = flat[from+1];
+  pts.push([x/Q, y/Q]);
+  for (let i = from+2; i < flat.length; i += 2){
+    x += flat[i]; y += flat[i+1];
+    pts.push([x/Q, y/Q]);
+  }
+  return pts;
+}
+const mx = lon => lon * Math.PI/180;
+const my = lat => Math.log(Math.tan(Math.PI/4 + lat*Math.PI/360));
+
+const STREETS = MAP.segs.map(s => ({cl:s[0], n:s[1], pts:decode(s, 2).map(p => [mx(p[0]), my(p[1])])}));
+const RINGS = MAP.blocks.map(b => ({bk:b[0], pts:decode(b, 1).map(p => [mx(p[0]), my(p[1])])}));
+ROWS.forEach(r => { r.X = mx(r.lon); r.Y = my(r.lat); });
+BLOCKS.forEach(b => {
+  const pts = ROWS.filter(r => r.bk === b.bk);
+  b.X = pts.reduce((a,r)=>a+r.X,0)/(pts.length||1);
+  b.Y = pts.reduce((a,r)=>a+r.Y,0)/(pts.length||1);
+  b.members = pts;
+});
+
+/* ---------- view ---------- */
+const cv = el("cv"), ctx = cv.getContext("2d");
+let view = {cx:0, cy:0, k:1}, W = 0, H = 0, dpr = 1, fitted = false;
+
+function bounds(list, trim){
+  const xs = list.map(r=>r.X).sort((a,b)=>a-b), ys = list.map(r=>r.Y).sort((a,b)=>a-b);
+  // Trimming the tails keeps a handful of rural doorways from shrinking the
+  // urban core, where nearly all of these calls are, to a few pixels.
+  const lo = trim ? Math.floor(xs.length*0.04) : 0;
+  const hi = trim ? Math.ceil(xs.length*0.96)-1 : xs.length-1;
+  return {x0:xs[lo], x1:xs[hi], y0:ys[lo], y1:ys[hi]};
+}
+function fitTo(list, pad, trim){
+  if (!list.length) return;
+  const b = bounds(list, trim), p = pad || 40;
+  const sx = (W - 2*p) / Math.max(1e-9, b.x1-b.x0);
+  const sy = (H - 2*p) / Math.max(1e-9, b.y1-b.y0);
+  view.k = Math.min(sx, sy);
+  if (!isFinite(view.k) || view.k <= 0) view.k = 60000;
+  view.cx = (b.x0+b.x1)/2; view.cy = (b.y0+b.y1)/2;
+  draw();
+}
+const sx = X => (X - view.cx) * view.k + W/2;
+const sy = Y => H/2 - (Y - view.cy) * view.k;
+const mpp = () => R * Math.cos(44.66*Math.PI/180) / view.k;   // ground metres per pixel
+
+function resize(){
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  const r = cv.getBoundingClientRect();
+  W = r.width; H = r.height;
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  // The first measurement can land before the canvas has a layout box, which
+  // would fit the map to a nonsense size. Wait for a real one, then fit once.
+  if (!fitted && W > 80 && H > 80){
+    fitted = true;
+    fitTo(mode === "block" ? BLOCKS : ROWS, 40, true);
+    return;
+  }
+  draw();
+}
+
+/* ---------- render ---------- */
+const CSSVAR = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function draw(){
+  if (!W) return;
+  const ink = CSSVAR("--ink"), line = CSSVAR("--line-2"), muted = CSSVAR("--muted");
+  const surf = CSSVAR("--surface-2"), card = CSSVAR("--surface");
+  const m = mpp();
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle = surf; ctx.fillRect(0,0,W,H);
+
+  // census blocks on the list: faint fill in their triage colour
+  const vis = visibleSet();
+  for (const rg of RINGS){
+    const b = BY_BLOCK.get(rg.bk); if (!b) continue;
+    const on = mode === "block" ? vis.has(b.key) : true;
+    ctx.beginPath();
+    rg.pts.forEach((p,i) => i ? ctx.lineTo(sx(p[0]), sy(p[1])) : ctx.moveTo(sx(p[0]), sy(p[1])));
+    ctx.closePath();
+    ctx.fillStyle = COLOR[st(b.key)];
+    ctx.globalAlpha = on ? (selected && selected.key === b.key ? 0.30 : 0.13) : 0.05;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = COLOR[st(b.key)];
+    ctx.globalAlpha = on ? 0.55 : 0.15;
+    ctx.lineWidth = selected && selected.key === b.key ? 2 : 1;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // streets, coarse to fine, thinning out as you zoom away
+  const WIDTHS = [2.6, 2.0, 1.5, 1.1, 0.8];
+  const CUTOFF = [1e9, 1e9, 60, 26, 11];   // max metres/pixel at which a class still draws
+  ctx.lineCap = "round";
+  for (let cl = 0; cl <= 4; cl++){
+    if (m > CUTOFF[cl]) continue;
+    ctx.beginPath();
+    for (const s of STREETS){
+      if (s.cl !== cl) continue;
+      const a = s.pts[0];
+      let px = sx(a[0]), py = sy(a[1]);
+      if (px < -60 || px > W+60 || py < -60 || py > H+60){
+        const b2 = s.pts[s.pts.length-1];
+        const qx = sx(b2[0]), qy = sy(b2[1]);
+        if (qx < -60 || qx > W+60 || qy < -60 || qy > H+60) continue;
+      }
+      ctx.moveTo(px, py);
+      for (let i = 1; i < s.pts.length; i++) ctx.lineTo(sx(s.pts[i][0]), sy(s.pts[i][1]));
+    }
+    ctx.strokeStyle = line;
+    ctx.globalAlpha = cl <= 1 ? 0.85 : 0.55;
+    ctx.lineWidth = WIDTHS[cl] * (m < 6 ? 1.3 : 1);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // street names once the streets are legible
+  if (m < 9){
+    ctx.font = '500 10px "JetBrains Mono", ui-monospace, monospace';
+    ctx.fillStyle = muted; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const placed = [];
+    for (const s of STREETS){
+      if (s.n < 0 || s.cl > (m < 5 ? 4 : 2)) continue;
+      const mid = s.pts[Math.floor(s.pts.length/2)];
+      const X = sx(mid[0]), Y = sy(mid[1]);
+      if (X < 40 || X > W-40 || Y < 12 || Y > H-12) continue;
+      const name = MAP.names[s.n];
+      if (placed.some(p => Math.abs(p.x-X) < 62 && Math.abs(p.y-Y) < 13)) continue;
+      placed.push({x:X, y:Y});
+      ctx.fillText(name, X, Y);
+      if (placed.length > 90) break;
+    }
+  }
+
+  // the doorways themselves
+  const items = mode === "block" ? BLOCKS : ROWS;
+  const maxV = Math.max(...items.map(i => mode === "block" ? i.n : i.m));
+  for (const it of items){
+    const on = vis.has(it.key);
+    const X = sx(it.X), Y = sy(it.Y);
+    if (X < -20 || X > W+20 || Y < -20 || Y > H+20) continue;
+    const v = mode === "block" ? it.n : it.m;
+    const rad = (mode === "block" ? 3.4 : 2.8) + 6 * Math.sqrt(v/maxV);
+    const isSel = selected && selected.key === it.key;
+    ctx.beginPath(); ctx.arc(X, Y, isSel ? rad+3.5 : rad, 0, 6.2832);
+    ctx.fillStyle = COLOR[st(it.key)];
+    ctx.globalAlpha = on ? 0.9 : 0.18; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.lineWidth = isSel ? 2.5 : 1;
+    ctx.strokeStyle = isSel ? ink : card;
+    ctx.globalAlpha = on ? 1 : 0.25; ctx.stroke(); ctx.globalAlpha = 1;
+  }
+
+  // scale bar
+  const target = 90 * m;
+  const nice = [10,20,50,100,200,500,1000,2000,5000].reduce((a,b) =>
+    Math.abs(b-target) < Math.abs(a-target) ? b : a);
+  const bar = el("scalebar");
+  bar.firstChild.textContent = nice >= 1000 ? (nice/1000)+" km" : nice+" m";
+  bar.querySelector("i").style.width = (nice/m).toFixed(0)+"px";
+  el("mapcap").textContent = mode === "block"
+    ? `${vis.size} block${vis.size===1?"":"s"} shown \u00b7 circle size = doorways still calling`
+    : `${vis.size} doorway${vis.size===1?"":"s"} shown \u00b7 circle size = calls in the last 12 months`;
+}
+
+/* ---------- hit testing ---------- */
+function pick(px, py){
+  const items = mode === "block" ? BLOCKS : ROWS;
+  let best = null, bd = 18*18;
+  for (const it of items){
+    const dx = sx(it.X)-px, dy = sy(it.Y)-py, d = dx*dx+dy*dy;
+    if (d < bd){ bd = d; best = it; }
+  }
+  return best;
+}
+
+/* ---------- interaction ---------- */
+const wrap = el("mapwrap");
+const pointers = new Map();
+let dragged = false, pinch = null;
+
+wrap.addEventListener("pointerdown", e => {
+  wrap.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+  dragged = false;
+  if (pointers.size === 2){
+    const [a,b] = [...pointers.values()];
+    pinch = {d:Math.hypot(a.x-b.x, a.y-b.y), k:view.k};
+  }
+  wrap.classList.add("drag");
+});
+wrap.addEventListener("pointermove", e => {
+  const p = pointers.get(e.pointerId);
+  if (p){
+    if (pointers.size === 2 && pinch){
+      pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+      const [a,b] = [...pointers.values()];
+      const d = Math.hypot(a.x-b.x, a.y-b.y);
+      view.k = Math.max(300, Math.min(4e6, pinch.k * d / pinch.d));
+      dragged = true; draw(); return;
+    }
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) dragged = true;
+    view.cx -= dx / view.k; view.cy += dy / view.k;
+    pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+    draw(); return;
+  }
+  // hover readout
+  const r = cv.getBoundingClientRect();
+  const hitEl = el("hit"), it = pick(e.clientX-r.left, e.clientY-r.top);
+  if (it){
+    hitEl.textContent = mode === "block"
+      ? `${it.s} \u00b7 ${it.n} doorways`
+      : `${it.a} \u00b7 ${it.m} calls`;
+    hitEl.style.left = sx(it.X)+"px"; hitEl.style.top = sy(it.Y)+"px";
+    hitEl.classList.add("on");
+  } else hitEl.classList.remove("on");
+});
+function endPointer(e){
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinch = null;
+  if (!pointers.size) wrap.classList.remove("drag");
+}
+wrap.addEventListener("pointerup", e => {
+  if (!dragged){
+    const r = cv.getBoundingClientRect();
+    const it = pick(e.clientX-r.left, e.clientY-r.top);
+    if (it){ selected = it; openKey = it.key; render(); scrollToOpen(); }
+  }
+  endPointer(e);
+});
+wrap.addEventListener("pointercancel", endPointer);
+wrap.addEventListener("pointerleave", () => el("hit").classList.remove("on"));
+
+wrap.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  const px = e.clientX - r.left, py = e.clientY - r.top;
+  const wx = view.cx + (px - W/2)/view.k, wy = view.cy - (py - H/2)/view.k;
+  const f2 = Math.exp(-e.deltaY * 0.0016);
+  view.k = Math.max(300, Math.min(4e6, view.k * f2));
+  view.cx = wx - (px - W/2)/view.k; view.cy = wy + (py - H/2)/view.k;
+  draw();
+}, {passive:false});
+wrap.addEventListener("dblclick", e => {
+  e.preventDefault();
+  view.k = Math.min(4e6, view.k*1.9); draw();
+});
+
+el("zin").onclick  = () => { view.k = Math.min(4e6, view.k*1.6); draw(); };
+el("zout").onclick = () => { view.k = Math.max(300, view.k/1.6); draw(); };
+el("zfit").onclick = () => fitTo(mode === "block" ? BLOCKS : ROWS, 40);
+el("zfit").title = "Fit every block, rural ones included";
+el("zpen").onclick = () => {
+  const pen = ROWS.filter(r => r.lat>44.62 && r.lat<44.68 && r.lon>-63.61 && r.lon<-63.55);
+  fitTo(pen.length ? pen : ROWS, 30);
+};
+function zoomTo(it, m){
+  view.cx = it.X; view.cy = it.Y;
+  view.k = R * Math.cos(44.66*Math.PI/180) / (m || 3.2);
+  draw();
+}
+
+/* ---------- list ---------- */
+const SORTS = {
+  block:[["n","Most doorways still calling"],["m","Most calls in the last 12 months"],
+         ["r","Highest calls per 1,000 dwellings"],["t","Most calls all time"]],
+  door: [["m","Most calls in the last 12 months"],["nb","Most neighbours also calling"],
+         ["t","Most calls all time"],["g","Shortest gap between calls"],["l","Most recent call"]]
+};
+function items(){
+  const base = mode === "block" ? BLOCKS : ROWS;
+  let v = base.filter(it =>
+    (!f.district || it.d === f.district) &&
+    (f.status === "all" || st(it.key) === f.status) &&
+    (!f.q || (mode === "block"
+        ? (it.s.toLowerCase().includes(f.q) || it.addrs.some(a => a.toLowerCase().includes(f.q)))
+        : (it.a.toLowerCase().includes(f.q) || it.st.toLowerCase().includes(f.q)))));
+  const cmp = {
+    n:(a,b)=>b.n-a.n||b.m-a.m, m:(a,b)=>b.m-a.m||b.t-a.t, t:(a,b)=>b.t-a.t,
+    r:(a,b)=>(b.r||0)-(a.r||0), nb:(a,b)=>b.nb-a.nb||b.m-a.m,
+    g:(a,b)=>(a.g==null?1e9:a.g)-(b.g==null?1e9:b.g),
+    l:(a,b)=>a.l<b.l?1:a.l>b.l?-1:0
+  };
+  return v.sort(cmp[f.sort] || cmp.m);
+}
+const visibleSet = () => new Set(items().map(i => i.key));
+
+function heads(){
+  el("rhead").className = "rhead" + (mode === "block" ? " blockrow" : "");
+  el("rhead").innerHTML = mode === "block"
+    ? `<div>Streets on the block</div><div class="num">Doorways</div><div class="num">Calls 12mo</div>
+       <div class="num">All</div><div class="num">Tows</div><div class="num">Dwellings</div>
+       <div class="num">Per 1k dwell.</div><div>Status</div>`
+    : `<div>Address</div><div>District</div><div class="num">Calls 12mo</div><div class="num">All</div>
+       <div class="num">Vehicles</div><div class="num">Tows</div><div class="num">On block</div><div>Status</div>`;
+  const s = el("sort"); s.innerHTML = "";
+  SORTS[mode].forEach(([k, label]) => {
+    const o = document.createElement("option"); o.value = k; o.textContent = label; s.appendChild(o);
+  });
+  if (!SORTS[mode].some(([k]) => k === f.sort)) f.sort = SORTS[mode][0][0];
+  s.value = f.sort;
+}
+
+function render(){
+  el("clear-filters").hidden = !(f.district || f.status !== "all" || f.q);
+  const v = items(), V = VOCAB();
+  el("showing").textContent = mode === "block"
+    ? `${v.length} of ${BLOCKS.length} blocks`
+    : `${v.length} of ${ROWS.length} doorways`;
+  el("maptitle").textContent = mode === "block"
+    ? "Halifax street network \u00b7 census blocks" : "Halifax street network \u00b7 doorways";
+  const list = el("list"); list.textContent = "";
+  const frag = document.createDocumentFragment();
+  const maxN = Math.max(...BLOCKS.map(b=>b.n)), maxM = Math.max(...ROWS.map(r=>r.m));
+
+  for (const it of v){
+    const s = st(it.key), meta = V[s] || V.none_;
+    const b = document.createElement("button");
+    b.className = "row" + (mode === "block" ? " blockrow" : "");
+    b.type = "button";
+    b.setAttribute("aria-expanded", openKey === it.key ? "true" : "false");
+    b.innerHTML = mode === "block"
+      ? `<span><span class="addr">${it.s}</span><span class="sub">district ${it.d} \u00b7 worst: ${it.worst}</span></span>` +
+        `<span class="hideS"><span class="bar"><i style="width:${Math.max(8,100*it.n/maxN)}%"></i></span>` +
+          `<span class="sub" style="font-family:'JetBrains Mono',monospace">${it.n}</span></span>` +
+        `<span class="num hideS">${it.m}</span><span class="num hideS">${it.t}</span>` +
+        `<span class="num hideS">${it.w}</span><span class="num hideS">${it.dw ? it.dw.toLocaleString() : "\u2013"}</span>` +
+        `<span class="num hideS">${it.r == null ? "\u2013" : it.r.toFixed(1)}</span>` +
+        `<span><span class="pill ${meta.pill}">${meta.label}</span></span>`
+      : `<span><span class="addr">${it.a}</span><span class="sub">${it.c}${it.st ? " \u00b7 " + it.st : ""}</span></span>` +
+        `<span class="num hideS">${it.d}</span>` +
+        `<span class="hideS"><span class="bar"><i style="width:${Math.max(6,100*it.m/maxM)}%"></i></span>` +
+          `<span class="sub" style="font-family:'JetBrains Mono',monospace">${it.m}</span></span>` +
+        `<span class="num hideS">${it.t}</span>` +
+        `<span class="num hideS">${it.vs ? it.vd+"/"+it.vs : "\u2013"}</span>` +
+        `<span class="num hideS">${it.w}</span>` +
+        `<span class="num hideS">${it.nb > 1 ? `<span class="flag">${it.nb}</span>` : "1"}</span>` +
+        `<span><span class="pill ${meta.pill}">${meta.label}</span></span>`;
+    b.onclick = () => {
+      openKey = openKey === it.key ? null : it.key;
+      selected = openKey ? it : null;
+      if (openKey) zoomTo(it, mode === "block" ? 6 : 3);
+      render();
+    };
+    frag.appendChild(b);
+    if (openKey === it.key) frag.appendChild(detail(it, s, V));
+  }
+  list.appendChild(frag);
+  if (!v.length){
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "No matches. Try another street, district or status.";
+    list.appendChild(empty);
+  }
+  draw(); chips();
+}
+function scrollToOpen(){
+  const n = el("list").querySelector('[aria-expanded="true"]');
+  if (n) n.scrollIntoView({block:"center", behavior:"smooth"});
+}
+
+/* ---------- evidence ---------- */
+function evidenceDoor(r){
+  const bits = [];
+  bits.push(`<b>${r.m}</b> call${r.m===1?"":"s"} in the last 12 months, <b>${r.t}</b> since 2020`);
+  if (r.vs > 1) bits.push(`<b>${r.vd} of the ${r.vs}</b> recorded vehicles were different cars`);
+  else if (r.vs === 1) bits.push("only one call recorded a vehicle, so the unique count says nothing here");
+  else bits.push("no call here recorded a vehicle");
+  bits.push(r.w === 0 ? "<b>no vehicle has ever been towed</b>" : `<b>${r.w}</b> tow${r.w===1?"":"s"}`);
+  if (r.g != null) bits.push(`a call arrives about every <b>${r.g}</b> days`);
+  bits.push(`last call <b>${r.l}</b>`);
+  let tail = "";
+  if (r.nb > 1) tail = ` <b>${r.nb} doorways on this block are still calling</b>, so a sign here alone probably will not settle it. Open the block view.`;
+  else tail = " No other doorway on this block is still calling, so this one is on its own.";
+  if (r.o === "PRIVATE") tail += " Recorded on private property, so the fix may not be HRM's to make.";
+  return bits.join(". ") + "." + tail;
+}
+function evidenceBlock(b){
+  const rate = b.r == null ? "" : ` That is <b>${b.r.toFixed(1)} calls per 1,000 dwellings</b>, against ${b.dw.toLocaleString()} dwellings on the block.`;
+  const tows = b.w === 0 ? "Not one vehicle has been towed on this block." : `<b>${b.w}</b> tow${b.w===1?"":"s"} across the block.`;
+  return `<b>${b.n}</b> separate doorways here are still calling, <b>${b.m}</b> calls between them in the last 12 months `
+       + `and <b>${b.t}</b> since 2020.${rate} ${tows} `
+       + `Putting a sign at each of the ${b.n} addresses is ${b.n} interventions for one problem.`;
+}
+
+/* ---------- detail ---------- */
+function detail(it, s, V){
+  const d = document.createElement("div");
+  d.className = "detail";
+  const isBlock = mode === "block";
+  const target = isBlock ? (BY_ADDR.get(it.worst) || it) : it;
+  const pano = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${target.lat},${target.lon}`;
+  const acts = isBlock
+    ? [["study","Needs a parking study"],["sched","Block measure scheduled"],["noact","No action needed"]]
+    : [["visit","Needs a site visit"],["sched","Fix scheduled"],["noact","No action needed"]];
+
+  d.innerHTML =
+    `<p class="ev">${isBlock ? evidenceBlock(it) : evidenceDoor(it)}</p>` +
+    (isBlock ? `<div class="addrlist">${it.addrs.map(a=>`<button type="button" data-go="${a}">${a}</button>`).join("")}</div>` : "") +
+    `<div class="acts">` +
+      acts.map(([k,label]) => `<button class="btn ${s===k?("on"+(k!=="sched"?" warn":"")):""}" data-s="${k}">${label}</button>`).join("") +
+      `<a class="btn link" href="${pano}" target="_blank" rel="noopener">Look at the curb${isBlock?" ("+it.worst+")":""} &rarr;</a>` +
+      `<button class="btn" data-ask="1" hidden>Read the evidence for me</button>` +
+    `</div>` +
+    `<textarea placeholder="${isBlock?"What does this block need?":"What did you see? What fix does it need?"}" aria-label="Note"></textarea>` +
+    `<p class="meta"></p><div class="advice" hidden></div>`;
+
+  const ta = d.querySelector("textarea");
+  ta.value = (DEC[it.key] && DEC[it.key].note) || "";
+  const rec = DEC[it.key];
+  d.querySelector(".meta").textContent = rec && rec.updatedAt
+    ? `Last changed ${new Date(rec.updatedAt).toLocaleString()}`
+    : "No decision recorded yet";
+
+  d.querySelectorAll("[data-s]").forEach(btn => btn.onclick = e => {
+    e.stopPropagation();
+    save(it, btn.dataset.s === s ? "none_" : btn.dataset.s, ta.value);
+  });
+  d.querySelectorAll("[data-go]").forEach(btn => btn.onclick = e => {
+    e.stopPropagation();
+    const r = BY_ADDR.get(btn.dataset.go);
+    if (!r) return;
+    mode = "door"; modebar(); heads(); f.status = "all"; statusSeg();
+    openKey = r.key; selected = r; zoomTo(r, 2.4); render(); scrollToOpen();
+  });
+  let t;
+  ta.oninput = () => { clearTimeout(t); t = setTimeout(() => save(it, s, ta.value, true), 700); };
+  ta.onclick = e => e.stopPropagation();
+  setupAsk(d, it, isBlock);
+  return d;
+}
+
+/* ---------- persistence ---------- */
+async function save(it, status, note, quiet){
+  const rec = {status, note:note||"", district:it.d, updatedAt:new Date().toISOString(),
+               label: mode === "block" ? it.s : it.a, kind: mode};
+  DEC[it.key] = rec;
+  if (quiet) { draw(); chips(); } else render();
+  if (!db){
+    saveLocal();
+    note2("Saved in this browser only. Nobody else sees it, and it is gone if you clear site data.");
+    return;
+  }
+  try { await db.doc("decisions/" + it.key.replace(":", "-")).set(rec); }
+  catch(e){ note2("Could not save that decision: " + (e && e.code ? e.code : "unknown error") + "."); }
+}
+const note2 = msg => { el("dbstate").textContent = msg; el("dbstate").hidden = !msg; };
+
+/* ---------- chrome ---------- */
+function chips(){
+  const base = mode === "block" ? BLOCKS : ROWS;
+  const counts = {};
+  base.forEach(it => counts[it.d] = (counts[it.d]||0) + 1);
+  const order = Object.keys(counts).sort((a,b)=>a==="?"?1:b==="?"?-1:Number(a)-Number(b));
+  const box = el("district"); box.textContent = "";
+  box.add(new Option("All districts", ""));
+  order.forEach(dd => {
+    const word = mode === "block" ? (counts[dd]===1?"block":"blocks") : (counts[dd]===1?"doorway":"doorways");
+    box.add(new Option(`${dd==="?"?"District unknown":"District "+dd} (${counts[dd]} ${word})`,dd));
+  });
+  box.value = f.district || "";
+  const n = f.district ? counts[f.district] : base.length;
+  const untri = base.filter(it => (!f.district || it.d===f.district) && st(it.key)==="none_").length;
+  const word = mode === "block" ? "blocks" : "doorways";
+  el("dsel").textContent = (f.district ? (f.district==="?"?"No district recorded":"District "+f.district) : "All districts")
+    + ` \u00b7 ${n} ${word} \u00b7 ${untri} not yet triaged`;
+}
+function statusSeg(){
+  const V = VOCAB(), box = el("statusfilter"); box.textContent = "";
+  const select = el("status-select"); select.textContent = "";
+  const short = {all:"All",none_:"Not triaged",study:"Study needed",visit:"Visit needed",sched:"Scheduled",noact:"No action"};
+  [["all","All"], ...Object.keys(V).map(k => [k, V[k].label])].forEach(([k,label]) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = short[k]; b.title = label;
+    select.add(new Option(label,k));
+    b.setAttribute("aria-pressed", f.status === k ? "true" : "false");
+    b.onclick = () => { f.status = k; statusSeg(); render(); };
+    box.appendChild(b);
+  });
+  select.value = f.status;
+}
+el("district").onchange = e => {
+  f.district = e.target.value || null;
+  render();
+  const base = mode === "block" ? BLOCKS : ROWS;
+  fitTo(f.district ? base.filter(x=>x.d===f.district) : base,40);
+};
+el("status-select").onchange = e => {f.status=e.target.value;statusSeg();render();};
+el("clear-filters").onclick = () => {
+  f.district=null;f.status="all";f.q="";el("q").value="";
+  statusSeg();render();fitTo(mode==="block"?BLOCKS:ROWS,40);
+};
+function modebar(){
+  el("modebar").querySelectorAll("[data-mode]").forEach(b =>
+    b.setAttribute("aria-pressed", b.dataset.mode === mode ? "true" : "false"));
+}
+el("modebar").querySelectorAll("[data-mode]").forEach(b => b.onclick = () => {
+  mode = b.dataset.mode; openKey = null; selected = null; f.status = "all";
+  modebar(); heads(); statusSeg(); render();
+  fitTo(mode === "block" ? BLOCKS : ROWS, 40);
+});
+el("sort").onchange = e => { f.sort = e.target.value; render(); };
+el("q").oninput = e => { f.q = e.target.value.trim().toLowerCase(); render(); };
+
+/* ---------- ask Claude ---------- */
+function setupAsk(d, it, isBlock){
+  const btn = d.querySelector("[data-ask]"), box = d.querySelector(".advice");
+  if (!sampler) return;
+  btn.hidden = false;
+  btn.onclick = async e => {
+    e.stopPropagation();
+    btn.disabled = true; box.hidden = false; box.textContent = "Thinking\u2026";
+    const facts = isBlock
+      ? `A city block in Halifax, Nova Scotia, around ${it.s}, council district ${it.d}.\n`
+        + `${it.n} separate driveways on this block generated ${it.m} blocked-driveway complaints in the last 12 months, ${it.t} since 2020.\n`
+        + `The block has ${it.dw} dwellings. Tows recorded across the whole block: ${it.w}.`
+      : `${it.a}, ${it.c}, Halifax council district ${it.d}.\n`
+        + `Blocked-driveway complaints: ${it.m} in the last 12 months, ${it.t} since 2020.\n`
+        + `Vehicles recorded: ${it.vd} distinct out of ${it.vs} calls that recorded one.\n`
+        + `Tows: ${it.w}. Median days between calls: ${it.g==null?"unknown":it.g}. Last call: ${it.l}.\n`
+        + `Other doorways on the same block still calling: ${it.nb - 1}.`;
+    const ask = isBlock
+      ? `Name the block-wide measure most likely to stop these calls (a residential parking permit zone, `
+        + `curb management and time limits, daylighting the corners, a parking study, or a curb extension), `
+        + `say what to check on the ground first, and name the single biggest reason your suggestion could be wrong.`
+      : `Name the physical measure most likely to stop these calls (a driveway marking, a no-parking sign, `
+        + `a bollard or flex post, curb paint, or a curb extension), say what a site visit should check first, `
+        + `and name the single biggest reason your suggestion could be wrong.`;
+    try{
+      const out = await sampler(
+        `You advise a municipal traffic operations team in Halifax, Nova Scotia.\n\n${facts}\n\n`
+        + `Enforcement has already been tried and towing does not change the recurrence rate. ${ask} `
+        + `Three or four sentences. Do not repeat the numbers back. Plain sentences, no headings, no lists.`,
+        {modelTier:"default", onText:({text}) => { box.textContent = text; }});
+      box.textContent = out.text;
+    }catch(err){
+      box.textContent = err && err.code === "not_granted"
+        ? "You declined, so this stays unanswered."
+        : "Could not reach Claude just now" + (err && err.code ? " (" + err.code + ")" : "") + ".";
+    }
+    btn.disabled = false;
+  };
+}
+
+/* ---------- boot ---------- */
+const useCap = n => (window.claude && window.claude.use) ? window.claude.use(n) : Promise.resolve(null);
+modebar(); heads(); statusSeg();
+new ResizeObserver(resize).observe(wrap);
+resize();
+render();
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => draw());
+
+(async () => {
+  db = await useCap("db");
+  if (!db){
+    DEC = loadLocal();
+    note2("");
+    render();
+    return;
+  }
+  db.collection("decisions").onSnapshot(
+    snap => {
+      const next = {};
+      snap.docs.forEach(doc => {
+        const id = doc.id;
+        next[id.startsWith("b-") ? "b:" + id.slice(2) : "d:" + id.slice(2)] = doc.data();
+      });
+      DEC = next;
+      const nb = BLOCKS.filter(b => st(b.key) !== "none_").length;
+      const nd = ROWS.filter(r => st(r.key) !== "none_").length;
+      note2(nb + nd === 0
+        ? "Decisions save for everyone who opens this page. Nothing triaged yet."
+        : `${nb} of ${BLOCKS.length} blocks and ${nd} of ${ROWS.length} doorways triaged. Everyone on this page sees the same decisions.`);
+      render();
+    },
+    e => note2("Live updates stopped (" + e.code + "). Your own changes still save.")
+  );
+})();
+
+(async () => {
+  const s = await useCap("sample");
+  if (!s) return;
+  sampler = s;
+  render();
+})();
+
+}
+boot();
+</script>
+
+</body>
+</html>

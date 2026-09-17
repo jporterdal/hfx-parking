@@ -1513,3 +1513,130 @@ def test_one_types_failing_snapshot_insert_does_not_block_the_others(
     assert derive_runs["No Parking Sign"][3] is False
     assert derive_runs["Blocking Driveway"][3] is True
     assert derive_runs["Private Property"][3] is True
+
+
+# --------------------------------------------------------- 5.7 type figures
+
+
+def type_figures_rows(conn, canonical_type=None):
+    q = ("SELECT canonical_type, sync_run_id, figures, parameters, mirror_version "
+        "FROM type_figures")
+    params = ()
+    if canonical_type:
+        q += " WHERE canonical_type = %s"
+        params = (canonical_type,)
+    q += " ORDER BY id"
+    with conn.cursor() as cur:
+        cur.execute(q, params)
+        return cur.fetchall()
+
+
+def test_a_quiet_night_computes_no_type_figures_and_costs_no_extra_request(
+        mirrored, service):
+    """Mirrors the 8.6 quiet-night test directly: a poll that finds nothing to pull
+    computes no figures either, and the request cost stays exactly what it was
+    before this feature existed."""
+    outcome = sync.sync(mirrored, now=NOW, log=lambda m: None)
+
+    assert outcome["pulled"] == []
+    assert outcome["type_figures"] == []
+    assert type_figures_rows(mirrored) == []
+    assert not runs(mirrored, kind="type_figures")
+    assert len(service.metadata_reads) == 3        # unchanged: one poll per layer
+    assert len(service.count_reads) == 3            # unchanged: one reconcile per layer
+    assert service.pages_served == 0                # unchanged: nothing paged
+
+
+def test_a_reload_computes_type_figures_for_every_type(mirrored, service):
+    """The path 5.7 specifies: a sync that actually reloaded a layer computes and
+    stores every canonical type's filter-independent figures, keyed to the mirror
+    version they were derived from."""
+    from mirror import type_figures, violation_types
+
+    service.add("service_requests",
+               request_feature(11, BASE_DATE + datetime.timedelta(hours=30)))
+    service.publish()
+
+    outcome = sync.sync(mirrored, now=NOW, log=lambda m: None)
+
+    assert outcome["pulled"]
+    assert len(outcome["type_figures"]) == len(violation_types.CANONICAL_TYPES)
+    assert {f["canonical_type"] for f in outcome["type_figures"]} == \
+        set(violation_types.CANONICAL_TYPES)
+    assert all(f["ok"] for f in outcome["type_figures"])
+
+    rows = type_figures_rows(mirrored)
+    assert len(rows) == len(violation_types.CANONICAL_TYPES)
+
+    driveway = type_figures_rows(mirrored, "Blocking Driveway")
+    assert len(driveway) == 1
+    canonical_type, sync_run_id, figures_json, parameters, mirror_version = driveway[0]
+    assert canonical_type == "Blocking Driveway"
+    assert set(figures_json) >= {"tow", "vehicles", "overall_conclusion",
+                                 "response_time", "call_denominators"}
+    assert parameters == type_figures.DEFAULT_PARAMETERS
+    with mirrored.cursor() as cur:
+        cur.execute("SELECT layer, source_last_edit FROM layer_state")
+        held = dict(cur.fetchall())
+    assert mirror_version == {
+        layer: (held[layer].isoformat() if held.get(layer) else None)
+        for layer in ("service_requests", "custom_fields", "census_areas")
+    }
+    type_figures_run = runs(mirrored, kind="type_figures", layer="Blocking Driveway")
+    assert len(type_figures_run) == 1 and type_figures_run[0][0] == sync_run_id
+    assert type_figures_run[0][3] is True
+    assert len(runs(mirrored, kind="type_figures")) == len(violation_types.CANONICAL_TYPES)
+
+
+def test_a_type_figures_failure_does_not_undo_the_reload_or_the_snapshots(
+        mirrored, service, monkeypatch):
+    """5.7: a figures-compute failure must not read as a failed sync and must not
+    undo the reload or the list snapshots (8.6) that already committed before this
+    step ever runs."""
+    from mirror import type_figures, violation_types
+
+    def explode(conn, **kwargs):
+        raise RuntimeError("type figures blew up")
+
+    monkeypatch.setattr(type_figures.per_type, "compute_all", explode)
+    service.add("service_requests",
+               request_feature(11, BASE_DATE + datetime.timedelta(hours=30)))
+    service.publish()
+
+    outcome = sync.sync(mirrored, now=NOW, log=lambda m: None)
+
+    reloaded = outcome["layers"]["service_requests"]["reload"]
+    assert reloaded["swapped"] is True and reloaded["reconciled"]
+    assert outcome["snapshots"] and all(s["ok"] for s in outcome["snapshots"])
+
+    assert outcome["type_figures"] == [
+        {"canonical_type": t, "ok": False, "error": "type figures blew up"}
+        for t in violation_types.CANONICAL_TYPES
+    ]
+    assert type_figures_rows(mirrored) == []
+    found = anomalies(mirrored, "type_figures_failed")
+    assert len(found) == len(violation_types.CANONICAL_TYPES)
+    assert {f[0] for f in found} == set(violation_types.CANONICAL_TYPES)
+    type_figures_runs = runs(mirrored, kind="type_figures")
+    assert len(type_figures_runs) == len(violation_types.CANONICAL_TYPES)
+    assert all(r[3] is False for r in type_figures_runs)
+
+
+def test_running_the_compute_command_again_after_a_reload_does_not_duplicate(
+        mirrored, service):
+    """The exact scenario 5.7 asks to be verified: a second run of the
+    compute-and-store command against the version a reload just produced does not
+    duplicate what the reload's own hook already stored."""
+    from mirror import type_figures
+
+    service.add("service_requests",
+               request_feature(11, BASE_DATE + datetime.timedelta(hours=30)))
+    service.publish()
+    sync.sync(mirrored, now=NOW, log=lambda m: None)
+    first_count = len(type_figures_rows(mirrored))
+    assert first_count > 0
+
+    outcomes = type_figures.compute_and_store(mirrored, now=NOW, log=lambda m: None)
+
+    assert outcomes == []                        # nothing missing; nothing computed
+    assert len(type_figures_rows(mirrored)) == first_count

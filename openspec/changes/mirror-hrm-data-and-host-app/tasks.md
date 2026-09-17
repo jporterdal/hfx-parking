@@ -106,7 +106,7 @@ claim exist only in hand-written prose and are reproduced by no generated output
 
 ## 5. Serve the application
 
-- [ ] 5.1 Serve the doorway list, block list and map over HTTP, and verify a viewer needs no install, account, credential or build step
+- [x] 5.1 Serve the doorway list, block list and map over HTTP, and verify a viewer needs no install, account, credential or build step
 - [ ] 5.2 Route per canonical violation type scoping lists, ranking, markers and triage state, and verify switching types never mixes rows and that a view carries only its own type's data
 - [ ] 5.3 Report an untracked type as untracked, and verify a route naming one renders a stated reason rather than an empty list
 - [ ] 5.4 Serve the street network as a cacheable asset, and verify moving between types does not re-download the 490 KB geometry
@@ -117,12 +117,14 @@ claim exist only in hand-written prose and are reproduced by no generated output
 - [ ] 5.5d State the filter values in effect on every view and export, and verify a filtered list cannot be mistaken for the default list
 - [ ] 5.5e Report an empty filter result as empty and name the values that excluded everything, and verify it is distinguishable from a failure
 - [ ] 5.6 Preserve light and dark rendering and following a preference change while open, and verify by toggling the system colour scheme with the application open
+- [x] 5.7 Compute and store each canonical type's filter-independent figures — per-type conclusions with their intervals, the tow effect bound and the call denominators — after every reload, keyed to the mirror version they were derived from, with a command that computes them for the version currently held, and verify a reload stores figures for every type and a second run against the same version does not duplicate them (`design.md` M12)
+- [ ] 5.8 Serve filter-independent figures from what 5.7 stored rather than computing them per request, and verify a view reports figures as unavailable, rather than computing them, when none are stored for the mirror's current version. This includes the tow comparison hard-coded into the markup at `web/app/index.html:280` — "A tow does not lower the chance a doorway calls again: **44.7 per cent against 44.6 per cent**" — which must be filled from the stored figures like every other figure on the page, and verify the sentence carries the current type's stored comparison rather than a number frozen into the file
 
 ## 6. Shared triage and role
 
 - [ ] 6.1 Persist a decision and its note server-side, and verify a decision recorded by one viewer is visible to a second viewer of the same type's list
 - [ ] 6.2 Verify decisions survive an application restart
-- [ ] 6.3 Remove the browser-storage fallback and the `window.claude.use("db")` binding at `web/template.html:1007`, and verify no code path leaves a viewer believing a local-only decision was shared
+- [ ] 6.3 Remove the browser-storage fallback and the `window.claude.use("db")` binding from the served page — now `web/app/index.html` (the `localStorage` read and write at 455-458, the `useCap` binding at 1056) — and verify no code path leaves a viewer believing a local-only decision was shared. **Checked 2026-09-17:** 5.1 evolved `web/app/index.html` as a new file rather than feeding `web/template.html` from the API as `design.md` M12 anticipated, so both files carry both strings. The served page is the one this task edits; `web/template.html` is the retired generator's substitution target and its disposal belongs to 8.7
 - [ ] 6.4 State plainly when a decision could not be persisted, and verify an unsaved decision is not displayed as recorded
 - [ ] 6.5 Attribute each decision to a role and a last-changed time, and verify both are visible on a triaged doorway and block
 - [ ] 6.6 Ask for a role before a decision is recorded while leaving the lists readable without one, and verify both paths
@@ -134,7 +136,7 @@ claim exist only in hand-written prose and are reproduced by no generated output
 - [ ] 7.2 Attribute a lag to whichever system owns it, and verify that a source that has not published for days reads as a limit of HRM's publishing schedule while a sync that has fallen behind a published source reads as this system being behind
 - [ ] 7.2a Make the next update a state rather than a rendered date, and verify that once the scheduled time has passed by the grace period with no successful sync the message reads as overdue rather than continuing to show a future date that never arrives
 - [ ] 7.2b State that the next source update is not yet known where too little history exists, and verify no estimate is fabricated from a single observation
-- [ ] 7.3 Remove the template's undated "Regenerated from the live service, not from a stored export" assertion, and verify the view shows dated freshness rather than a claim — the sentence is also now false, since it is served from a mirror **[was 9.3]**
+- [ ] 7.3 Remove the undated "Regenerated from the live service, not from a stored export" assertion from the served page (`web/app/index.html:379`), and verify the view shows dated freshness rather than a claim — the sentence is also now false, since it is served from a mirror. **Checked 2026-09-17:** the same sentence survives at `web/template.html:379`; as in 6.3, that file is the retired generator's input and goes out with 8.7, so this task changes the served page only **[was 9.3]**
 - [ ] 7.4 State the recency window's anchor date and length on every filtered list, and verify the wording names the date the window is measured from **[was 10.3]**
 - [ ] 7.4a Warn when the most recent call in the data is materially older than the run time, and verify the warning fires against a deliberately stale input **[was 10.2]**
 - [ ] 7.5 Carry the interpretation limits into the served views — intake clock, tow as the only recorded outcome, vehicle identity as a floor, text address reduction, derived block labels, block-wide dwelling rate — and verify each is reachable from the view carrying the figures it bears on **[was 12.2, 12.3]**
@@ -150,7 +152,7 @@ The repository currently states 9,791 calls, 363 doorways and 71 blocks in `READ
 drifted within days. A public URL turns that into a credibility problem. Section 4b must land
 first, or the figures 8.1 needs still will not exist.
 
-- [ ] 8.1 Replace every hand-written figure in `README.md` and `docs/parking-hotspots/` with the current generated value, and verify each published number is reproduced by output the reader can regenerate **[was 13.1]**
+- [x] 8.1 Replace every hand-written figure in `README.md` and `docs/parking-hotspots/` with the current generated value, and verify each published number is reproduced by output the reader can regenerate — **completed in part; the remainder is deferred to a future change.** Done: every figure in `README.md`'s "What it found", "Blocks, not doorways" and handout sections, and in `docs/parking-hotspots/product.md` and `data-sources.md`, re-read from the current mirror and annotated with the command that regenerates it. Not done, deliberately: (a) the `README.md` sentences that 8.4 rewrites wholesale were left alone rather than corrected twice; (b) several one-off counts (the `RESOLUTION` and `COMMUNITY` shares, the live-layer year counts) are annotated with the module they were counted from but have no regeneration script, so "reproduced by output the reader can regenerate" holds only for the figures with a CLI behind them; (c) `docs/parking-hotspots/decisions.md` keeps its original figures on purpose — it is the narrative record of what was decided and on what evidence, and restating it against a later mirror would falsify that record. Writing the missing scripts, and settling how a dated decision record cites figures that have since moved, are a future change's work **[was 13.1]**
 - [x] 8.1a Re-derive the hour-of-day and channel figures in `docs/` under the corrected timezone conversion, and verify the published numbers match the corrected output or are updated to it **[was 8.2]**
 - [ ] 8.2 Correct `README.md`'s hosted-copy claim — "The hosted copy shares those decisions with everyone who opens it, so a team triages one list instead of three" — to describe the served application, and verify it no longer describes a Claude Artifact
 - [ ] 8.3 Qualify `README.md`'s "No keys and no install" to the viewer rather than the system, and verify it does not imply the server has no dependencies

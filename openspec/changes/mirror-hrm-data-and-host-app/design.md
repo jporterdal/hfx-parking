@@ -241,6 +241,18 @@ A single "window" control would therefore be a lie in both directions: moving it
 
 There is one constraint the filters must not break. A threshold is part of what a figure means: a doorway list at a minimum of two recent calls and the same list at a minimum of five are different claims, and a screenshot of either is indistinguishable from the other unless the view says which it is. So a view and an export both state the filter values that produced them.
 
+### M12. Server shape
+
+Four choices the decisions above left open, settled before the first server code was written.
+
+**Flask, synchronous.** The mirror is read through synchronous psycopg and a derivation is CPU work of 0.1 to 3 seconds, so an asynchronous framework would run nearly everything in a thread pool and gain little. Flask is small and well understood, and a production WSGI server such as gunicorn runs it. The standard library's `http.server` was the dependency-free alternative; it would mean hand-building routing, caching headers and concurrency, which is a poor trade for a public URL. `src/hotspots.py` stays stdlib-only; the dependency is the server's, not the viewer's.
+
+**The existing page, fed by a JSON API.** `web/template.html` already carries the lists, the map, the triage controls and light and dark rendering in plain JavaScript. It is kept and its embedded data is replaced with fetches from the server. There is no build step, which task 5.1 requires, and no working interface is discarded.
+
+**Figures that do not depend on filters are computed when the mirror reloads.** M11 computes derived data per request and defers caching until a measurement says it is needed. The measurement now exists: the per-type conclusions, with their doorway-resampling intervals, take about 9 seconds for all thirty types and 2.7 seconds for `No Parking Sign` alone. Those results depend only on the mirror's published version, not on any filter, so they are computed after each reload and stored alongside the retained lists (8.6), and the server reads them. M11 stands for everything a filter changes — the doorway and block lists stay per request. This is the narrowest materialization the measurement justifies, and it invalidates itself: a new version brings new figures.
+
+**Host-agnostic.** Deployment stays out of scope. The server reads its port and database address from the environment and ships two commands, one to serve and one to sync, so any host that can run a web process and a scheduled command can run it. Nothing in the code names a host.
+
 ## Risks / Trade-offs
 
 - **A silent sync failure serves stale data behind a healthy-looking page** → the central risk, addressed by M4: recorded sync outcomes, last-successful-sync on every view, and a visible staleness warning. It is a genuine regression in failure honesty relative to a stateless pipeline, bought deliberately.

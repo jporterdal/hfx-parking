@@ -1,8 +1,13 @@
 # Data sources
 
 Status: Final.
-Date: 2026-09-12.
-All counts come from live queries run on 2026-09-12.
+Date: 2026-09-12; figures naming a live query below carry that query's own date.
+Mirror-sourced counts refreshed 2026-09-16 against the local mirror (`src/mirror/`); regenerate row
+and rate counts with `python -m mirror.figures --violation Driveway`, `python src/mirror/derive.py
+<dir> --violation Driveway`, and direct counts against `service_requests`/`custom_fields` (see
+`src/mirror/db.py`). The one-off comparisons against layers the mirror does not carry — Community
+Boundaries, Community Plan Areas, the street-vs-block share below, and the whole Commuter Permit
+Parking Streets section — remain dated 2026-09-12 and are not reproduced by current code.
 
 ## The two datasets the product joins
 
@@ -14,9 +19,9 @@ The join is the product.
 
 `https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/Cityworks_Service_Requests/FeatureServer/0`
 
-477,343 rows.
+478,458 rows.
 One row per call.
-Most recent call: 2026-09-05.
+Most recent call: 2026-09-12.
 
 Fields used:
 
@@ -47,29 +52,29 @@ Split by `INITIATED_BY` before you use the hour.
 
 `https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/Cityworks_Service_Requests_Custom_Fields/FeatureServer/0`
 
-1,153,448 rows.
+1,156,710 rows.
 A key and value store.
 Each row is one extra field on one call: `REQUESTID`, `CUSTOM_FIELD_NAME`, `CUSTOM_FIELD_VALUE`.
 
 The parking fields are the richest set in the whole table.
-Each appears on about 110,500 calls, which is one per illegal parking call.
+Each appears on about 110,900 calls, which is one per illegal parking call.
 
 | Custom field | What it gives you |
 |--------------|-------------------|
-| Alleged Violation | The real problem. "Blocking Driveway (DISPATCH)" is 9,729 calls. |
-| Vehicle Was Towed | Y or N. The outcome. 1,868 Y across all parking. |
+| Alleged Violation | The real problem. "Blocking Driveway (DISPATCH)" is 9,770 calls. |
+| Vehicle Was Towed | Y or N. The outcome. 1,869 Y across all parking. |
 | Property Ownership | HRM, PRIVATE, PROVINCE, FEDERAL, OTHER. |
 | Vehicle Make, Model, Colour, Province | The vehicle. Counting distinct values per address shows whether one driver repeats. It is not a plate, so two identical cars count as one. |
 
-Alleged Violation values, top five:
+Alleged Violation values, top five, from `src/mirror/violation_types.py`'s frozen count (2026-09-16):
 
 | Value | Calls |
 |-------|------:|
-| No Parking Sign | 27,302 |
-| Private Property | 17,029 |
-| On Highway Over 24 Hours | 12,187 |
-| Blocking Driveway (DISPATCH) | 9,729 |
-| Over Time Specified | 4,892 |
+| No Parking Sign | 27,404 |
+| Private Property | 17,061 |
+| On Highway Over 24 Hours | 12,244 |
+| Blocking Driveway (DISPATCH) | 9,770 |
+| Over Time Specified | 4,902 |
 
 The 71 raw labels group into 30 canonical types, each a current label with its `(DISPATCH)` variant and its legacy short code, frozen on 2026-09-16 in `src/mirror/violation_types.py`.
 Two legacy codes are left unmapped because neither reduces to one current label: `OVERTIME` (1 call) could be `Over Time at Meter` or a catch-all from before `Over Time Specified` got its own code, and `VIOLATION` (4 calls) names no type at all.
@@ -97,16 +102,16 @@ Verified against the service's own `esriSpatialRelIntersects` query on six addre
 
 | Candidate | Why not |
 |-----------|---------|
-| `COMMUNITY` on the call record | 7,651 of 9,791 driveway calls just say HALIFAX. |
-| Community Boundaries (`GSA`), 200 polygons | Same failure. "HALIFAX" holds 3,121 of the 4,255 addresses. |
+| `COMMUNITY` on the call record | 7,683 of 9,834 driveway calls just say HALIFAX. Current mirror, counted via `mirror.derive.load(conn, violation="Driveway")`'s `COMMUNITY` field. |
+| Community Boundaries (`GSA`), 200 polygons | Same failure. "HALIFAX" holds 3,121 of the 4,255 addresses — a one-off live check, 2026-09-12. This layer is not part of the mirror; not reproduced by current code. |
 | Community Plan Areas, 22 polygons | Far too coarse. |
-| Street name from the address, 1,039 groups | Works, and readable, but a weaker cut: the top 20 streets hold 25 per cent of recent calls against 35 per cent for the top 20 blocks. Kept as the `street` column and used to name each block. |
+| Street name from the address, 1,039 groups | Works, and readable, but a weaker cut: the top 20 streets hold 25 per cent of recent calls against 35 per cent for the top 20 blocks — a one-off measurement, 2026-09-12, not reproduced by current code. Kept as the `street` column and used to name each block. |
 
 ## Limits to state on stage
 
 - `ADDRESS` is free text. The same doorway appears with and without a postal code. The product strips everything after the first comma. Some doorways will still split.
-- 2,423 illegal parking calls carry no address at all.
-- `Vehicle Was Towed` is the only enforcement outcome published. There is no ticketing field anywhere in the 87 distinct custom field names, and `RESOLUTION` has no "ticket issued" value. A call with no tow is a call with no recorded outcome, not proof that nothing was done.
+- 2,415 illegal parking calls carry no address at all (current mirror: `service_requests` joined to `custom_fields` where `Alleged Violation` is present and `ADDRESS` is null or blank).
+- `Vehicle Was Towed` is the only enforcement outcome published. There is no ticketing field anywhere in the 88 distinct custom field names (current mirror: `select count(distinct custom_field_name) from custom_fields`), and `RESOLUTION` has no "ticket issued" value. A call with no tow is a call with no recorded outcome, not proof that nothing was done.
 - `DATE_CLOSED` is when the service request closed. For parking that is close to the real end of the job. For trees it is not, because the call closes when a work order opens.
 - Timestamps are UTC. Convert to `America/Halifax` local time before you talk about hour of day — Halifax is UTC-4 (AST) for most of the year and UTC-3 (ADT) only in summer, so a fixed offset is wrong outside daylight saving; use a DST-aware conversion (`zoneinfo.ZoneInfo("America/Halifax")`).
 - The ArcGIS layers page at 1,000 rows per request. Use `resultOffset`. The census layer pages at 200 when geometry is returned.
@@ -117,10 +122,14 @@ Verified against the service's own `esriSpatialRelIntersects` query on six addre
 
 The handout says "Service-request data ends December 2024".
 That may describe the handed-out export.
-The live layer holds 68,857 calls from 2025 and 50,895 from 2026, through 2026-09-05.
-Query the service directly.
+The live layer holds 68,861 calls from 2025 and 52,006 from 2026, through 2026-09-12.
+Query the service directly. (Counted against the mirror's `service_requests` table, 2026-09-16.)
 
 ## Datasets checked and not used
+
+The rows below are as counted on 2026-09-12; none of these layers are mirrored (only `service_requests`,
+`custom_fields` and `census_areas` are — `src/mirror/status.py`'s `TRACKED_LAYERS`), so none of this
+section is reproduced by current code.
 
 | Dataset | Rows | Why not |
 |---------|-----:|---------|
@@ -133,6 +142,10 @@ Query the service directly.
 | Commuter Permit Parking Streets | 325 | A map of where permits apply. No calls, no dates, no outcomes, and no street name. Tested against the watch list and it does not separate a repeat doorway from any other. See below. |
 
 ## Commuter Permit Parking Streets, tested 2026-09-12
+
+Historical, one-off. This layer was never added to the mirror (`src/mirror/status.py`'s
+`TRACKED_LAYERS` holds only `service_requests`, `custom_fields` and `census_areas`), so every figure
+below is a live query from 2026-09-12 and is not reproduced by current code.
 
 `https://services2.arcgis.com/11XBiaBYA9Ep0yNJ/arcgis/rest/services/Commuter_Permit_Parking_Streets/FeatureServer/0`
 

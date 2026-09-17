@@ -734,6 +734,17 @@ def sync(conn, layers=None, now=None, force_pull=False, poll_only=False,
     from mirror import history
     outcome["snapshots"] = history.snapshot_after_sync(conn, outcome, now, log=log)
 
+    # 5.7: filter-independent per-type figures, computed once per reload and read
+    # by the server (5.8) instead of recomputed per view. Same gate as the
+    # snapshots above -- only when a layer actually reloaded -- and the same local
+    # import, for the same reason: this module has finished initializing by the
+    # time sync() actually runs, so the cycle back through mirror.type_figures
+    # (which imports this module) is safe here but not at module load time. See
+    # `mirror/type_figures.py`'s module docstring for why a quiet night still
+    # costs nothing extra.
+    from mirror import type_figures
+    outcome["type_figures"] = type_figures.after_sync(conn, outcome, now, log=log)
+
     return outcome
 
 
@@ -781,6 +792,13 @@ def describe(outcome):
         else:
             lines.append(f"  retained {snap['violation_type']}: FAILED — "
                          f"{snap['error']}")
+    for fig in outcome.get("type_figures") or []:
+        if fig["ok"]:
+            lines.append(f"  type figures {fig['canonical_type']}: stored "
+                         f"(id {fig['id']})")
+        else:
+            lines.append(f"  type figures {fig['canonical_type']}: FAILED — "
+                         f"{fig['error']}")
     return "\n".join(lines)
 
 

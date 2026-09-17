@@ -86,6 +86,7 @@ This is a **temporary working document**, not an OpenSpec artifact — delete it
 | 5.4 | Serve street network as cacheable asset | 5.1 |
 | **5.5** | Compute derived results per request against indexed mirror | 5.1 — **BOTTLENECK, unblocks 5.5a, 5.5b** |
 | 5.6 | Preserve light/dark rendering | 5.1 |
+| 5.8 | Serve stored filter-independent figures | 5.1, 5.7 |
 | **6.1** | Persist triage decision server-side | 5.1 — **BOTTLENECK, unblocks 6.2, 6.3, 6.4, 6.6** |
 | 7.1 | Prominent freshness message | 5.1, 3.3, 3.4 |
 | 7.3 | Remove undated "regenerated live" claim | 5.1 |
@@ -202,6 +203,8 @@ This is a **temporary working document**, not an OpenSpec artifact — delete it
 5.5d: [5.5c]
 5.5e: [5.5a]
 5.6: [5.1]
+5.7: [4.17, 8.6]                          # added with M12; ready now
+5.8: [5.1, 5.7]
 6.1: [5.1]                                # BOTTLENECK
 6.2: [6.1]
 6.3: [6.1]
