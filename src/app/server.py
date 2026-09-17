@@ -33,11 +33,17 @@ Route table:
 
   GET  /                                the page (`web/app/index.html`),
                                          always for the default canonical type
+  GET  /types/<slug>                    the same page, for the type <slug>
+                                         names -- task 5.2, see below
   GET  /map-network.json                the street network, as a static asset
                                          served from its own URL (490 KB, one
                                          file for every type; cached for a day
                                          with a conditional GET past that, per
                                          task 5.4 -- see the route below)
+  GET  /api/types                       every tracked canonical type and its
+                                         slug, `{default_slug, types: [{slug,
+                                         type}, ...]}` -- task 5.2, what the
+                                         page's type switcher reads at boot
   GET  /api/types/<slug>/doorways       a type's doorway list, `{type, slug,
                                          count, latest, summary, rows}`
   GET  /api/types/<slug>/blocks         a type's block list, `{type, slug,
@@ -65,15 +71,33 @@ the client side. `web/app/index.html` still carries the pre-6.1
 `window.claude.use("db")`/`localStorage` code paths; removing them is task
 6.3's job, not this one's (see that file's comments).
 
-**Why the route already looks like `/api/types/<slug>/...` when only one type
-answers.** Task 5.2 routes every canonical type this way; building that switch
-is explicitly out of scope for 5.1. `_SLUG_TO_CANONICAL` below already maps
-every tracked type's slug to its canonical name -- computed once, from
-`violation_types.CANONICAL_TYPES`, the same way 5.2 will need it -- but
-`_canonical_for_slug` deliberately answers only `DEFAULT_SLUG` for now. Turning
-this into full per-type routing is a one-line change to that function
-(`_SLUG_TO_CANONICAL.get(slug)` in place of the `if slug != DEFAULT_SLUG`
-guard), not a reshape of the route table, the payload shape or the page.
+**Task 5.2: every tracked type now answers, not just the default.**
+`_SLUG_TO_CANONICAL` maps every tracked type's slug to its canonical name --
+computed once, from `violation_types.CANONICAL_TYPES` -- and
+`_canonical_for_slug` now looks a slug up there directly rather than
+special-casing `DEFAULT_SLUG` (5.1 deliberately restricted it to just the
+default; see that task's note, now superseded, that used to sit here). This
+was, as 5.1 predicted, a one-line change to `_canonical_for_slug` -- no
+reshape of the route table or the payload shape. What 5.2 *does* add beyond
+that lift: `GET /types/<slug>`, a page route so a type has a real URL to
+land on or share rather than only being reachable by switching client-side
+after loading `/`; and `GET /api/types`, the list `web/app/index.html`'s type
+switcher fetches to know what those URLs are. Every list, marker and triage
+route was already written generically against `<slug>` (5.1's forward-looking
+shape) and derives strictly per request from the one canonical type the slug
+names (`mirror.derive.derive(canonical_type=canonical)`,
+`mirror.triage.list_for(conn, canonical)`) -- there is no code path in this
+module that reads or returns more than one type's rows for a single request,
+which is what keeps switching types from mixing them (`tests/test_app.py`'s
+"routing scoped by type" section proves this against seeded data for more
+than the default type, not just the default).
+
+**Performance stays per-5.5's measurements.** Routing to a different type
+does not change what one request computes: it is still exactly one
+`derive()` call for exactly one canonical type, the same shape 5.5 measured
+(349ms default, 662ms for the largest type, `No Parking Sign`). Nothing here
+calls `derive_all()` or loops over `_SLUG_TO_CANONICAL` to answer one
+request.
 
 **Why the default type is both a substring match and a canonical type.**
 `derive.DEFAULT_VIOLATION` ("Driveway", `hotspots.load()`'s selection) and the
@@ -102,7 +126,7 @@ _SRC_DIR = _REPO_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from flask import Flask, jsonify, request, send_from_directory  # noqa: E402
+from flask import Flask, abort, jsonify, request, send_from_directory  # noqa: E402
 
 from mirror import db, derive, triage, violation_types  # noqa: E402
 
@@ -137,12 +161,14 @@ assert _SLUG_TO_CANONICAL.get(DEFAULT_SLUG) == DEFAULT_CANONICAL_TYPE, (
 
 def _canonical_for_slug(slug):
     """The canonical type name a route's `<slug>` names, or `None` when it does
-    not resolve. Deliberately answers only `DEFAULT_SLUG` today -- see the
-    module docstring's note on 5.2.
+    not resolve -- any slug not in `_SLUG_TO_CANONICAL`, whether it names a
+    real HRM label this codebase has not frozen (task 4.15 owns the frozen
+    list; see the top-level `FILE OWNERSHIP` note in this change's tasks if
+    that list looks wrong) or names nothing at all. Every route below treats
+    the two cases identically -- a bare 404 -- because telling them apart for
+    a viewer is task 5.3's job, not this function's (module docstring).
     """
-    if slug != DEFAULT_SLUG:
-        return None
-    return DEFAULT_CANONICAL_TYPE
+    return _SLUG_TO_CANONICAL.get(slug)
 
 
 # ------------------------------------------------------- response shaping
@@ -236,6 +262,23 @@ def create_app(conn_factory=None):
     def index():
         return send_from_directory(APP_WEB_DIR, "index.html")
 
+    @app.get("/types/<slug>")
+    def type_page(slug):
+        """The same page `index()` serves, at a per-type URL (task 5.2). One
+        static file answers for every type -- design.md M12 rules out a build
+        step, so there is no per-type file to generate -- and
+        `web/app/index.html`'s boot script reads `<slug>` back out of
+        `location.pathname` (its `SLUG` constant) to decide which type's data
+        to fetch, the same script regardless of which type that turns out to
+        be. An untracked slug 404s here the same bare way the JSON routes do
+        (`_canonical_for_slug`); rendering that as a stated reason instead of
+        a bare 404 is task 5.3's job, not this route's -- see the module
+        docstring's "explicitly not yours" note.
+        """
+        if _canonical_for_slug(slug) is None:
+            abort(404)
+        return send_from_directory(APP_WEB_DIR, "index.html")
+
     @app.get("/map-network.json")
     def map_network():
         # Task 5.4: the 490 KB street network never varies by canonical type or
@@ -261,6 +304,28 @@ def create_app(conn_factory=None):
         # conditional-GET checks for the mechanism, not just the assertion.
         return send_from_directory(
             WEB_DIR, "map-network.json", max_age=86400, conditional=True, etag=True,
+        )
+
+    @app.get("/api/types")
+    def list_types():
+        """Every tracked canonical type and its slug (task 5.2): `{default_slug,
+        types: [{slug, type}, ...]}`, in `violation_types.CANONICAL_TYPES`'
+        own order (busiest first -- see that module's docstring), not
+        resorted. This is what `web/app/index.html`'s type switcher fetches
+        once at boot to build its control and to turn a chosen type back into
+        the slug it navigates to -- the only place that list is assembled, so
+        a type added to the frozen list in `violation_types.py` needs no
+        change here to show up in the switcher. No database connection: the
+        list is a pure function of the frozen type table already held in
+        memory (`_SLUG_TO_CANONICAL`), so this route costs nothing like a
+        `derive()` call does.
+        """
+        return jsonify(
+            default_slug=DEFAULT_SLUG,
+            types=[
+                {"slug": slug, "type": name}
+                for slug, name in _SLUG_TO_CANONICAL.items()
+            ],
         )
 
     @app.get("/api/types/<slug>/doorways")

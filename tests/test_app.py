@@ -70,20 +70,28 @@ def insert_service_request(conn, object_id, request_id, address, date_initiated,
     conn.commit()
 
 
-def seed_driveway_call(conn, request_id, address, when, towed="N", lat=0.5, lon=0.5):
-    """One call filed under a raw label the canonical 'Blocking Driveway' grouping
-    covers exactly (`violation_types.raw_labels_for("Blocking Driveway")`) -- the
-    type the app's default route serves. `object_id` is just `request_id`; the
-    two id spaces never need to differ in a test.
+def seed_call(conn, request_id, address, when, raw_label, towed="N", lat=0.5, lon=0.5):
+    """One call filed under `raw_label` -- any raw label
+    `violation_types.RAW_LABEL_TO_CANONICAL` knows, so this seeds a call for
+    whichever canonical type that label belongs to. `object_id` is just
+    `request_id`; the two id spaces never need to differ in a test.
     """
     insert_service_request(conn, request_id, request_id, address, when, lat=lat, lon=lon)
     base = request_id * 10
-    insert_custom_field(conn, base, request_id, "Alleged Violation",
-                        "Blocking Driveway (DISPATCH)")
+    insert_custom_field(conn, base, request_id, "Alleged Violation", raw_label)
     insert_custom_field(conn, base + 1, request_id, "Vehicle Was Towed", towed)
     insert_custom_field(conn, base + 2, request_id, "Vehicle Make", "FORD")
     insert_custom_field(conn, base + 3, request_id, "Vehicle Model", "F150")
     insert_custom_field(conn, base + 4, request_id, "Vehicle Colour", "BLUE")
+
+
+def seed_driveway_call(conn, request_id, address, when, towed="N", lat=0.5, lon=0.5):
+    """One call filed under a raw label the canonical 'Blocking Driveway' grouping
+    covers exactly (`violation_types.raw_labels_for("Blocking Driveway")`) -- the
+    type the app's default route serves.
+    """
+    seed_call(conn, request_id, address, when, "Blocking Driveway (DISPATCH)",
+              towed=towed, lat=lat, lon=lon)
 
 
 def seed_two_doorway_block(conn):
@@ -97,6 +105,32 @@ def seed_two_doorway_block(conn):
                        towed="Y")
     seed_driveway_call(conn, 4003, "2 SECOND ST, HALIFAX", LATEST - datetime.timedelta(days=8))
     seed_driveway_call(conn, 4004, "2 SECOND ST, HALIFAX", LATEST - datetime.timedelta(days=3))
+
+
+def seed_two_types_two_doorway_blocks(conn):
+    """Two *different* canonical types, each with its own two-doorway block, in
+    two different census areas -- the fixture `test_switching_types_...` below
+    (5.2's own "prove no mixing" verify clause) needs data that would visibly
+    collide if a route or the page ever failed to scope by type: distinct
+    addresses, distinct block ids, distinct raw labels grouping to distinct
+    canonical types (`violation_types.raw_labels_for`).
+    """
+    insert_census_area(conn, "12090999", SQUARE_RING, object_id=1)
+    insert_census_area(conn, "12091111",
+                       [[[10, 10], [10, 11], [11, 11], [11, 10], [10, 10]]], object_id=2)
+    seed_driveway_call(conn, 4001, "1 FIRST ST, HALIFAX", LATEST - datetime.timedelta(days=10))
+    seed_driveway_call(conn, 4002, "1 FIRST ST, HALIFAX", LATEST - datetime.timedelta(days=5),
+                       towed="Y")
+    seed_driveway_call(conn, 4003, "2 SECOND ST, HALIFAX", LATEST - datetime.timedelta(days=8))
+    seed_driveway_call(conn, 4004, "2 SECOND ST, HALIFAX", LATEST - datetime.timedelta(days=3))
+    seed_call(conn, 5001, "9 NINTH AVE, HALIFAX", LATEST - datetime.timedelta(days=12),
+              "No Parking Sign", lat=10.5, lon=10.5)
+    seed_call(conn, 5002, "9 NINTH AVE, HALIFAX", LATEST - datetime.timedelta(days=6),
+              "No Parking Sign", towed="Y", lat=10.5, lon=10.5)
+    seed_call(conn, 5003, "10 TENTH AVE, HALIFAX", LATEST - datetime.timedelta(days=9),
+              "NOPARKING", lat=10.5, lon=10.5)
+    seed_call(conn, 5004, "10 TENTH AVE, HALIFAX", LATEST - datetime.timedelta(days=2),
+              "NOPARKING", lat=10.5, lon=10.5)
 
 
 @pytest.fixture
@@ -153,16 +187,45 @@ def test_index_served_at_root_with_no_auth_and_no_build_step(client):
     assert "const DATA = __DATA__" not in body
     assert "const MAP  = __MAP__" not in body
     # It fetches its data rather than requiring any install/build step. The
-    # slug is a JS template-literal interpolation (`/api/types/${DEFAULT_SLUG}/
+    # slug is a JS template-literal interpolation (`/api/types/${SLUG}/
     # doorways`), not a literal path, so this checks for the constant that
-    # resolves it plus the route pattern it is spliced into.
+    # resolves it plus the route pattern it is spliced into. Task 5.2: SLUG
+    # (read from the URL, defaulting to DEFAULT_SLUG at "/") is what every
+    # fetch below uses -- not the DEFAULT_SLUG constant itself, which would
+    # pin every view to Blocking Driveway regardless of the type routed to.
     assert '"blocking-driveway"' in body
     assert "/map-network.json" in body
-    assert "/api/types/${DEFAULT_SLUG}/doorways" in body
-    assert "/api/types/${DEFAULT_SLUG}/blocks" in body
+    assert "/api/types/${SLUG}/doorways" in body
+    assert "/api/types/${SLUG}/blocks" in body
+    assert "/api/types/${SLUG}/decisions" in body
+    assert "const SLUG" in body
     # No bundled or externally hosted script -- the only <script> is inline,
     # matching design.md M12's "no build step, no front-end framework."
     assert "<script src" not in body
+    # Task 5.2: the type switcher -- a plain <select>, populated from
+    # /api/types, no router or framework added to build it.
+    assert 'id="type-switch"' in body
+    assert 'fetch("/api/types")' in body
+
+
+def test_hardcoded_tow_thesis_is_guarded_outside_the_default_type(client):
+    """5.8's job is to serve each type's own stored tow-effect figure; this
+    task's job is only to make sure routing to a different type does not
+    silently show Blocking Driveway's hardcoded "44.7 per cent against 44.6
+    per cent" sentence as if it were that other type's own number (see
+    server.py and web/app/index.html's 5.2 comments on this hazard). This
+    pins the minimal guard's presence: the sentence is wrapped in
+    id="tow-thesis" and boot() blanks it whenever SLUG is not the default.
+    A full check would require a running browser at a non-default URL, which
+    this environment does not have -- see this task's report for that
+    caveat.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert 'id="tow-thesis"' in body
+    assert "44.7 per cent against 44.6 per cent" in body
+    assert "SLUG !== DEFAULT_SLUG" in body
+    assert "not yet available" in body
 
 
 def test_index_is_reachable_with_a_bare_client_no_headers(client):
@@ -289,21 +352,96 @@ def test_blocks_api_with_no_seeded_calls_returns_an_empty_list(client, clean_db)
 # ----------------------------------------------------------- routing scoped by type
 
 
-def test_an_untracked_or_unrecognised_slug_answers_404_not_an_empty_list(client):
-    """Task 5.1 deliberately does not build type switching: only the default
-    slug resolves. A different real canonical type's slug ('No Parking Sign')
-    and a slug naming nothing at all are treated identically today -- both
-    answer 404 rather than silently rendering an empty list, so 5.2/5.3 have a
-    clear signal to build on rather than a response that looks like a type
-    with zero doorways.
+def test_a_slug_naming_nothing_answers_404_not_an_empty_list(client):
+    """A slug that names no tracked canonical type -- not a real HRM type
+    misspelled, just nothing at all -- answers 404 rather than silently
+    rendering an empty list, so 5.3 has a clear signal to build its rendered
+    explanation on rather than a response that looks like a type with zero
+    doorways. (Task 5.1 used to also 404 every *real* type but the default;
+    task 5.2 lifts that restriction -- see
+    `test_every_tracked_type_answers_not_just_the_default`, below, for the
+    positive case this test used to conflate with a truly unknown slug.)
     """
-    for slug in ("no-parking-sign", "not-a-real-type"):
+    for slug in ("not-a-real-type", "blocking-driveways"):
         resp = client.get(f"/api/types/{slug}/doorways")
         assert resp.status_code == 404
         assert resp.get_json()["error"] == "untracked"
 
         resp = client.get(f"/api/types/{slug}/blocks")
         assert resp.status_code == 404
+
+
+def test_every_tracked_type_answers_not_just_the_default(client, clean_db):
+    """Task 5.2's core lift: `_canonical_for_slug` used to answer only
+    `DEFAULT_SLUG`. A second, non-default real canonical type ('No Parking
+    Sign') now resolves too, with no seeded data required to prove the route
+    itself works (an empty list is a valid, non-404 answer -- see
+    `test_doorways_api_with_no_seeded_calls_returns_an_empty_list_not_an_error`
+    for the default type's version of this same guarantee).
+    """
+    for slug, name in (("no-parking-sign", "No Parking Sign"),
+                        ("private-property", "Private Property"),
+                        ("on-highway-over-24-hours", "On Highway Over 24 Hours")):
+        resp = client.get(f"/api/types/{slug}/doorways")
+        assert resp.status_code == 200
+        assert resp.get_json()["type"] == name
+
+        resp = client.get(f"/api/types/{slug}/blocks")
+        assert resp.status_code == 200
+        assert resp.get_json()["type"] == name
+
+        resp = client.get(f"/api/types/{slug}/decisions")
+        assert resp.status_code == 200
+        assert resp.get_json()["type"] == name
+
+
+def test_every_canonical_type_resolves_to_a_working_route(client):
+    """Not just three spot-checked types: every entry in the frozen
+    `violation_types.CANONICAL_TYPES` list answers a real 200, matching the
+    task's "every tracked canonical type gets a working route" requirement
+    literally rather than by sample.
+    """
+    from mirror import violation_types
+    for name in violation_types.CANONICAL_TYPES:
+        slug = app_server._slug(name)
+        resp = client.get(f"/api/types/{slug}/doorways")
+        assert resp.status_code == 200, f"{name!r} ({slug!r}) did not resolve"
+        assert resp.get_json()["type"] == name
+
+
+# ------------------------------------------------------------- /api/types (5.2)
+
+
+def test_api_types_lists_every_tracked_type_with_its_slug(client):
+    from mirror import violation_types
+
+    resp = client.get("/api/types")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["default_slug"] == app_server.DEFAULT_SLUG
+    got = {t["slug"]: t["type"] for t in data["types"]}
+    expected = {app_server._slug(name): name for name in violation_types.CANONICAL_TYPES}
+    assert got == expected
+    # Busiest-first order, same as violation_types.CANONICAL_TYPES itself --
+    # the switcher is not free to resort it.
+    assert [t["type"] for t in data["types"]] == list(violation_types.CANONICAL_TYPES)
+
+
+# ------------------------------------------------------------ /types/<slug> page (5.2)
+
+
+def test_type_page_serves_the_same_page_for_a_tracked_type(client):
+    resp = client.get("/types/no-parking-sign")
+
+    assert resp.status_code == 200
+    assert "text/html" in resp.content_type
+    assert resp.get_data(as_text=True) == client.get("/").get_data(as_text=True)
+
+
+def test_type_page_404s_for_an_untracked_slug(client):
+    resp = client.get("/types/not-a-real-type")
+    assert resp.status_code == 404
 
 
 def test_doorways_and_blocks_endpoints_agree_on_the_type_they_scope_to(client, clean_db):
@@ -314,6 +452,116 @@ def test_doorways_and_blocks_endpoints_agree_on_the_type_they_scope_to(client, c
 
     assert door["type"] == block["type"] == app_server.DEFAULT_CANONICAL_TYPE
     assert door["slug"] == block["slug"] == app_server.DEFAULT_SLUG
+
+
+# ------------------------------------------- no mixing between types (5.2's verify clause)
+#
+# Task 5.2's own words: "verify switching types never mixes rows and that a
+# view carries only its own type's data." Every test below seeds two
+# canonical types at once with `seed_two_types_two_doorway_blocks` (disjoint
+# addresses, disjoint census blocks, disjoint lat/lon) and checks that a
+# request for one type's route -- doorways, blocks, or triage decisions --
+# never returns anything that belongs to the other. This is deliberately
+# proved through the HTTP routes end to end, not asserted from reading
+# `_canonical_for_slug`'s source: a correct-looking lookup function is not
+# evidence the route built on it actually threads the right value through to
+# every query it issues (see the DEFAULT_SLUG-vs-SLUG bug this task fixed in
+# web/app/index.html's saveDecision()/loadDecisions() -- exactly the kind of
+# mistake that looks fine by inspection and fails only under a request for a
+# non-default type).
+
+
+def test_switching_types_doorway_lists_never_mix(client, clean_db):
+    seed_two_types_two_doorway_blocks(clean_db)
+
+    driveway = client.get("/api/types/blocking-driveway/doorways").get_json()
+    no_parking = client.get("/api/types/no-parking-sign/doorways").get_json()
+
+    driveway_addrs = {r["a"] for r in driveway["rows"]}
+    no_parking_addrs = {r["a"] for r in no_parking["rows"]}
+    assert driveway_addrs == {"1 First St", "2 Second St"}
+    assert no_parking_addrs == {"9 Ninth Ave", "10 Tenth Ave"}
+    assert driveway_addrs.isdisjoint(no_parking_addrs)
+    assert driveway["type"] == "Blocking Driveway"
+    assert no_parking["type"] == "No Parking Sign"
+
+
+def test_switching_types_block_lists_never_mix(client, clean_db):
+    seed_two_types_two_doorway_blocks(clean_db)
+
+    driveway = client.get("/api/types/blocking-driveway/blocks").get_json()
+    no_parking = client.get("/api/types/no-parking-sign/blocks").get_json()
+
+    assert {b["bk"] for b in driveway["blocks"]} == {"12090999"}
+    assert {b["bk"] for b in no_parking["blocks"]} == {"12091111"}
+
+
+def test_switching_types_map_markers_never_mix(client, clean_db):
+    """The doorway payload *is* the marker data (`web/app/index.html` plots
+    `rows[].lat/lon` directly onto the canvas) -- there is no separate
+    "markers" endpoint to check, so proving the doorway rows are
+    type-disjoint (the test above) already proves the markers are. This test
+    additionally pins the coordinates themselves apart, so a future change
+    that split markers from the row list would still be caught if it
+    resurfaced the mixing this task rules out.
+    """
+    seed_two_types_two_doorway_blocks(clean_db)
+
+    driveway = client.get("/api/types/blocking-driveway/doorways").get_json()
+    no_parking = client.get("/api/types/no-parking-sign/doorways").get_json()
+
+    assert all(r["lat"] == 0.5 for r in driveway["rows"])
+    assert all(r["lat"] == 10.5 for r in no_parking["rows"])
+
+
+def test_switching_types_triage_decisions_never_mix_over_http(client, clean_db):
+    """The route-level counterpart to
+    `test_a_decision_under_one_violation_type_does_not_appear_under_another`
+    (which exercises `mirror.triage` directly): this goes through the actual
+    POST/GET routes for two different types, which is what would have caught
+    web/app/index.html's saveDecision()/loadDecisions() reading DEFAULT_SLUG
+    instead of SLUG -- a defect invisible at the `mirror.triage` layer
+    (correctly scoped there already by task 6.1) but live at the page's
+    fetch call sites until this task's edit.
+    """
+    posted = client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "doorway", "item_key": "1-first-st", "decision": "visit",
+              "note": "driveway note"},
+    )
+    assert posted.status_code == 200
+
+    driveway_decisions = client.get("/api/types/blocking-driveway/decisions").get_json()
+    no_parking_decisions = client.get("/api/types/no-parking-sign/decisions").get_json()
+
+    assert len(driveway_decisions["decisions"]) == 1
+    assert driveway_decisions["decisions"][0]["item_key"] == "1-first-st"
+    assert no_parking_decisions["decisions"] == []
+
+
+def test_same_item_key_under_two_types_does_not_collide(client, clean_db):
+    """Two different types can legitimately produce the same item_key text
+    (an address slug or a census block id is not unique across violation
+    types) -- the table's UNIQUE constraint is
+    `(violation_type, scope, item_key)`, so this must stay two independent
+    rows, not one type's write clobbering the other's.
+    """
+    client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "doorway", "item_key": "shared-key", "decision": "visit"},
+    )
+    client.post(
+        "/api/types/no-parking-sign/decisions",
+        json={"scope": "doorway", "item_key": "shared-key", "decision": "noact"},
+    )
+
+    driveway_decisions = client.get("/api/types/blocking-driveway/decisions").get_json()
+    no_parking_decisions = client.get("/api/types/no-parking-sign/decisions").get_json()
+
+    assert len(driveway_decisions["decisions"]) == 1
+    assert driveway_decisions["decisions"][0]["decision"] == "visit"
+    assert len(no_parking_decisions["decisions"]) == 1
+    assert no_parking_decisions["decisions"][0]["decision"] == "noact"
 
 
 # --------------------------------------------------------- decisions API (6.1)
@@ -475,12 +723,12 @@ def test_decision_missing_required_fields_is_rejected(client, clean_db):
 
 
 def test_decisions_endpoints_404_for_an_untracked_slug(client):
-    resp = client.get("/api/types/no-parking-sign/decisions")
+    resp = client.get("/api/types/not-a-real-type/decisions")
     assert resp.status_code == 404
     assert resp.get_json()["error"] == "untracked"
 
     resp = client.post(
-        "/api/types/no-parking-sign/decisions",
+        "/api/types/not-a-real-type/decisions",
         json={"scope": "doorway", "item_key": "x", "decision": "visit"},
     )
     assert resp.status_code == 404
@@ -497,7 +745,7 @@ def test_index_page_persists_decisions_through_the_server_not_local_storage_only
     """
     body = client.get("/").get_data(as_text=True)
 
-    assert "/api/types/${DEFAULT_SLUG}/decisions" in body
+    assert "/api/types/${SLUG}/decisions" in body
     assert "loadDecisions" in body
     assert "saveDecision" in body
     # The pre-6.1 fallback is still present (6.3 removes it), just not the

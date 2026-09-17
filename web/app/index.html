@@ -277,7 +277,7 @@ canvas#cv{display:block;width:100%;height:100%}
   <h1>Blocks, not doorways</h1>
   <details class="research">
   <summary>Why blocks? Read the analysis</summary>
-  <p class="thesis">A tow does not lower the chance a doorway calls again: <b>44.7 per cent against 44.6 per cent</b>.
+  <p class="thesis"><span id="tow-thesis">A tow does not lower the chance a doorway calls again: <b>44.7 per cent against 44.6 per cent</b>.</span>
   Across these addresses <b><span id="distinct-count">&hellip;</span> of <span id="seen-count">&hellip;</span> recorded vehicles were different cars</b>. There is no repeat offender to
   deter, so the street is producing the violation. And <b><span id="with-neighbour-count">&hellip;</span> of the <span id="n-doorways-thesis">&hellip;</span> doorways sit on a block where a neighbour is
   also still calling</b>, which means most of these are not a sign at one address. They are one block-wide problem
@@ -296,6 +296,14 @@ canvas#cv{display:block;width:100%;height:100%}
 
 <section class="toolbar" aria-label="Filter map and list">
   <div class="toolbar-top">
+    <!-- Task 5.2: the only way to move between violation types -- a plain
+         HTML select, populated and wired to navigate by the boot script
+         below (see the /api/types fetch and its handler in boot()). No
+         router, no framework, no build step (design.md M12); a plain page
+         navigation to GET /types/(slug) is the whole mechanism. -->
+    <label class="district-filter" for="type-switch"><span class="filter-label">Violation type</span>
+      <select id="type-switch" aria-label="Choose which violation type to view"></select>
+    </label>
     <div class="modebar" id="modebar">
       <button type="button" data-mode="block">By block</button>
       <button type="button" data-mode="door">By doorway</button>
@@ -386,20 +394,29 @@ canvas#cv{display:block;width:100%;height:100%}
  * Here the same two values are fetched from this server's JSON API instead of
  * being embedded, which is the only structural change from the template:
  * everything below this boot() wrapper is template.html's script unmodified.
- * DEFAULT_SLUG names the one type this page serves; 5.2 is what turns it into
- * a routed choice. */
+ *
+ * Task 5.2: DEFAULT_SLUG is still the type `/` (no path suffix) serves, but
+ * SLUG -- what every fetch() below actually uses -- is read back out of the
+ * URL, because server.py's `GET /types/<slug>` route serves this exact file
+ * unchanged for every tracked type (no build step means no per-type file to
+ * generate, design.md M12). A viewer who opens /types/no-parking-sign gets
+ * this same script, and SLUG resolves to "no-parking-sign" instead of the
+ * default -- that is the entire mechanism behind "switching types," no
+ * framework or router involved. */
 const DEFAULT_SLUG = "blocking-driveway";
+const SLUG = (location.pathname.match(/^\/types\/([a-z0-9-]+)\/?$/) || [null, DEFAULT_SLUG])[1];
 
 async function boot(){
 const banner = document.getElementById("dbstate");
 const showBanner = msg => { banner.textContent = msg; banner.hidden = !msg; };
 
-let mapRes, doorRes, blockRes;
+let mapRes, doorRes, blockRes, typesRes;
 try{
-  [mapRes, doorRes, blockRes] = await Promise.all([
+  [mapRes, doorRes, blockRes, typesRes] = await Promise.all([
     fetch("/map-network.json"),
-    fetch(`/api/types/${DEFAULT_SLUG}/doorways`),
-    fetch(`/api/types/${DEFAULT_SLUG}/blocks`),
+    fetch(`/api/types/${SLUG}/doorways`),
+    fetch(`/api/types/${SLUG}/blocks`),
+    fetch("/api/types"),
   ]);
 }catch(e){
   showBanner("Could not reach the server. Check your connection and reload.");
@@ -414,6 +431,47 @@ const doorPayload = await doorRes.json();
 const blockPayload = await blockRes.json();
 const DATA = {rows: doorPayload.rows, blocks: blockPayload.blocks};
 const ROWS = DATA.rows, BLOCKS = DATA.blocks;
+
+/* Task 5.2: the type switcher. /api/types is fetched above alongside the
+ * type-scoped data (not gated behind it) so a slow /api/types never delays
+ * the list a viewer actually asked for -- a failed or slow switcher fetch
+ * degrades to an empty <select>, not a blocked page. Populating it is the
+ * only per-view work this page does with another type's *name*; it never
+ * touches another type's rows, markers or decisions -- those three stay
+ * scoped to SLUG everywhere else in this file. */
+(async () => {
+  const sel = document.getElementById("type-switch");
+  if (!sel || !typesRes || !typesRes.ok) return;
+  let typesPayload;
+  try { typesPayload = await typesRes.json(); } catch(e) { return; }
+  for (const t of (typesPayload.types || [])){
+    const opt = document.createElement("option");
+    opt.value = t.slug; opt.textContent = t.type;
+    if (t.slug === SLUG) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  sel.addEventListener("change", () => {
+    location.href = sel.value === DEFAULT_SLUG ? "/" : `/types/${sel.value}`;
+  });
+})();
+
+/* Task 5.2 hazard note (not this task's to fix -- task 5.8's): the tow
+ * comparison sentence below ("A tow does not lower...44.7 per cent against
+ * 44.6 per cent") is Blocking Driveway's own figure, frozen into this
+ * markup rather than computed per type (see web/app/index.html's `<p
+ * class="thesis">`). Every *other* number on this page now comes from
+ * SLUG's own /api/types/<slug>/... response and is correct for whichever
+ * type is being viewed; this one sentence is not, and routing to another
+ * type would otherwise silently show Driveway's number under that type's
+ * view with nothing marking it as wrong. This is a minimal guard, not 5.8's
+ * fix (serving each type's own stored figure): it blanks the claim outside
+ * Driveway rather than compute or store anything. */
+if (SLUG !== DEFAULT_SLUG){
+  const towThesis = document.getElementById("tow-thesis");
+  if (towThesis){
+    towThesis.textContent = "Tow-effect comparison for this type is not yet available.";
+  }
+}
 
 /* Header figures the template used to have write_board() bake into the page
  * text at generation time (__LATEST__, __N_DOORWAYS__, ...). Same numbers, now
@@ -967,8 +1025,12 @@ async function save(it, status, note, quiet){
  * or "b:"+block id (see where ROWS/BLOCKS get .key assigned, above) -- the
  * same two-character-prefix convention the old db.doc("decisions/"+...)
  * call relied on. That keeps a doorway decision and a block decision from
- * colliding even where their key text matches, and (DEFAULT_SLUG being part
- * of the URL) keeps one violation type's decisions off another's list.
+ * colliding even where their key text matches, and (SLUG -- the type this
+ * particular view is showing, task 5.2 -- being part of the URL) keeps one
+ * violation type's decisions off another's list. This must read SLUG, not
+ * DEFAULT_SLUG: writing every type's decisions against the default slug is
+ * exactly the kind of mixing this task's verify clause exists to catch --
+ * see tests/test_app.py's "routing scoped by type" section.
  *
  * A failed write is not swallowed: it lands in the console and in the same
  * status banner loadDecisions() uses below, so task 6.4 ("state plainly when
@@ -980,7 +1042,7 @@ async function saveDecision(it, status, note){
   const scope = it.key.startsWith("b:") ? "block" : "doorway";
   const item_key = it.key.slice(2);
   try{
-    const resp = await fetch(`/api/types/${DEFAULT_SLUG}/decisions`, {
+    const resp = await fetch(`/api/types/${SLUG}/decisions`, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({scope, item_key, decision: status, note: note || ""}),
@@ -1107,10 +1169,14 @@ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () 
  * writes to. This is what makes a decision recorded by one viewer visible to
  * a second viewer of the same type's list: both run this on load, both read
  * the same triage_decisions rows through GET /api/types/<slug>/decisions.
+ * Task 5.2: <slug> here is SLUG (this view's own type), not DEFAULT_SLUG --
+ * otherwise every type's page would load Blocking Driveway's decisions
+ * regardless of which type it was showing, which is precisely the mixing
+ * this task's verify clause rules out.
  */
 async function loadDecisions(){
   try{
-    const resp = await fetch(`/api/types/${DEFAULT_SLUG}/decisions`);
+    const resp = await fetch(`/api/types/${SLUG}/decisions`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const payload = await resp.json();
     const next = {};
