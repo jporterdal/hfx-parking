@@ -22,13 +22,14 @@ instead of three.
 python3 src/hotspots.py
 ```
 
-No keys and no install — for this pipeline and for anyone opening the board.
-It reads HRM open data over HTTPS and writes every output: the doorway list, the block list, and
-the standalone board.
+No keys and no install for the viewer: opening the board takes nothing but a browser. The
+pipeline that builds it reads HRM open data over HTTPS and writes every output: the doorway
+list, the block list, and the standalone board.
 
-The mirror and the server that will replace this pipeline do have dependencies, listed in
-`requirements.txt` (this project previously had no manifest at all). `src/hotspots.py` stays
-stdlib-only, and a viewer still installs nothing.
+The mirror and the server that will replace this pipeline do have dependencies, listed in `requirements.txt` (this project
+previously had no manifest at all): a Postgres database and a Python dependency set (Flask
+behind a WSGI server such as gunicorn). `src/hotspots.py` stays stdlib-only, and a viewer still
+installs nothing.
 
 | Output | What it is |
 |--------|------------|

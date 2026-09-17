@@ -183,6 +183,41 @@ def test_map_network_served_as_its_own_asset(client):
     assert len(payload["segs"]) > 0
 
 
+def test_map_network_is_cacheable(client):
+    """Task 5.4: the 490 KB payload carries `Cache-Control` and an `ETag`, the
+    two headers that let a browser skip re-downloading it -- `max-age` so it
+    skips the request entirely within the window, `ETag` so a request made
+    past the window can be answered with a 304 rather than the body. Neither
+    is Flask's bare default: `send_from_directory` without `max_age` sends no
+    `Cache-Control` at all, which is what the pre-5.4 route did (see the route's
+    comment in `src/app/server.py`).
+    """
+    resp = client.get("/map-network.json")
+
+    assert resp.status_code == 200
+    assert "max-age=86400" in resp.headers["Cache-Control"]
+    assert "public" in resp.headers["Cache-Control"]
+    assert resp.headers.get("ETag")
+
+
+def test_map_network_conditional_get_sends_no_body_when_unchanged(client):
+    """The mechanism behind "moving between types does not re-download the
+    geometry" (5.4's verify clause): a second request that already holds the
+    first response's `ETag` gets a 304 with an empty body, not another 490 KB
+    payload. A real client never issues this second request within
+    `max-age=86400` at all (`test_map_network_is_cacheable`); this test covers
+    the request a client makes once that window has passed, which is the
+    other half of "does not re-download" -- revalidation, not just caching.
+    """
+    first = client.get("/map-network.json")
+    etag = first.headers["ETag"]
+
+    second = client.get("/map-network.json", headers={"If-None-Match": etag})
+
+    assert second.status_code == 304
+    assert second.data == b""
+
+
 # --------------------------------------------------------------------- doorways API
 
 

@@ -34,8 +34,10 @@ Route table:
   GET  /                                the page (`web/app/index.html`),
                                          always for the default canonical type
   GET  /map-network.json                the street network, as a static asset
-                                         served from its own URL (490 KB;
-                                         cache headers are task 5.4's)
+                                         served from its own URL (490 KB, one
+                                         file for every type; cached for a day
+                                         with a conditional GET past that, per
+                                         task 5.4 -- see the route below)
   GET  /api/types/<slug>/doorways       a type's doorway list, `{type, slug,
                                          count, latest, summary, rows}`
   GET  /api/types/<slug>/blocks         a type's block list, `{type, slug,
@@ -218,10 +220,30 @@ def create_app(conn_factory=None):
 
     @app.get("/map-network.json")
     def map_network():
-        # A sensible default (Flask/Werkzeug's conditional GET support via
-        # send_from_directory) -- cache-control tuning for the 490 KB payload
-        # is task 5.4's.
-        return send_from_directory(WEB_DIR, "map-network.json")
+        # Task 5.4: the 490 KB street network never varies by canonical type or
+        # by filter -- every route in this module reads it from the one file
+        # `src/hotspots.py --network` last wrote, so there is nothing per-request
+        # to compute here, unlike /api/types/<slug>/... Two mechanisms make that
+        # cacheable rather than merely static:
+        #   - `max_age` sets `Cache-Control: public, max-age=86400`, so a browser
+        #     that already has it skips the request entirely -- not just the
+        #     body -- for a day rather than re-asking on every navigation.
+        #     Not `immutable`/a year: the file has no cache-busting name (no
+        #     build step, per design.md M12), so a rare re-derivation of the
+        #     network needs a bounded staleness window rather than an unbounded
+        #     one under the same URL.
+        #   - `conditional`/`etag` (Werkzeug's `send_file` defaults, already true
+        #     without passing them -- named here so the choice reads as made,
+        #     not merely inherited) mean a request past that window that finds
+        #     the file unchanged gets a 304 with no body, rather than resending
+        #     the 490 KB.
+        # Together, switching between violation types -- which never touches
+        # this route again once a viewer's browser holds one response -- cannot
+        # re-download the geometry; see tests/test_app.py's cache-control and
+        # conditional-GET checks for the mechanism, not just the assertion.
+        return send_from_directory(
+            WEB_DIR, "map-network.json", max_age=86400, conditional=True, etag=True,
+        )
 
     @app.get("/api/types/<slug>/doorways")
     def doorways(slug):

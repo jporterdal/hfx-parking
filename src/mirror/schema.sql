@@ -32,6 +32,14 @@ CREATE TABLE IF NOT EXISTS service_requests (
     mirrored_at         timestamptz NOT NULL DEFAULT now()
 );
 
+-- Read by every per-request derivation (mirror.derive.load -> _service_request_rows,
+-- task 5.5, design.md M11): `WHERE request_id = ANY(...) ORDER BY request_id`, once
+-- per call to derive()/derive_all(), against whatever selection a violation type or
+-- --canonical-type names. Audited against EXPLAIN (ANALYZE, BUFFERS) on the fully
+-- loaded mirror (478,458 rows) for task 5.5 rather than assumed: this index is what
+-- turns that lookup into an index scan already ordered by request_id (so no separate
+-- sort is needed either), 9,834 rows in ~40ms warm. No further index was found
+-- missing for the derivation's read path -- see the same task's measurements.
 CREATE INDEX IF NOT EXISTS service_requests_request_id_idx
     ON service_requests (request_id);
 CREATE INDEX IF NOT EXISTS service_requests_date_initiated_idx
@@ -54,9 +62,24 @@ CREATE TABLE IF NOT EXISTS custom_fields (
     mirrored_at        timestamptz NOT NULL DEFAULT now()
 );
 
+-- Read by the per-request derivation's parking_call_attributes fetch (task 5.5):
+-- `WHERE request_id = ANY(...)` pushed down through that view's GROUP BY, so this
+-- index -- not a table scan -- is what a canonical type's vehicle/outcome pivot
+-- runs against. ~9,834 ids resolved to ~68,838 matching rows in ~50ms warm on the
+-- fully loaded mirror (task 5.5's measurement).
 CREATE INDEX IF NOT EXISTS custom_fields_request_id_idx
     ON custom_fields (request_id);
--- Selecting a violation type: name = 'Alleged Violation' AND value LIKE '%DRIVEWAY%'.
+-- Selecting a violation type: name = 'Alleged Violation' AND value LIKE '%DRIVEWAY%',
+-- or (canonical-type selection, task 4.15/4.16) name = 'Alleged Violation' AND value
+-- = ANY(frozen label list). Both are read by mirror.derive.load on every per-request
+-- derivation (task 5.5, design.md M11) -- audited by EXPLAIN against the fully loaded
+-- mirror rather than assumed: this index turns the substring selection into an index
+-- range scan on name narrowed to ~110,900 rows before the LIKE filter runs (~69ms
+-- warm with two parallel workers -- a LIKE with a leading wildcard cannot use a btree
+-- range on value itself, so filtering that subset in the executor is the ceiling, not
+-- a gap this index could close), and the canonical-type selection into a bitmap index
+-- scan covering both columns directly (~87ms warm for two labels/9,834 rows). No
+-- additional index was found missing for either read path.
 CREATE INDEX IF NOT EXISTS custom_fields_name_value_idx
     ON custom_fields (custom_field_name, custom_field_value);
 -- The per-call pivot reads seven names by request.

@@ -447,8 +447,6 @@ const BLOCK_ST = {
   sched:{label:"Block measure scheduled", pill:"sched"},
   noact:{label:"No action needed", pill:"none"}
 };
-const COLOR = {none_:"#e0ab0a", visit:"#b3541e", study:"#b3541e", sched:"#1a7d52", noact:"#9aa5a0"};
-
 let DEC = {}, db = null, sampler = null;
 const LS_KEY = "halifax-triage-decisions";
 function loadLocal(){
@@ -575,6 +573,10 @@ function draw(){
   if (!W) return;
   const ink = CSSVAR("--ink"), line = CSSVAR("--line-2"), muted = CSSVAR("--muted");
   const surf = CSSVAR("--surface-2"), card = CSSVAR("--surface");
+  // Same four colours as the legend (--hazard/--alert/--accent/--line-2), read fresh
+  // every draw so a triage-status marker tracks the legend swatch across a theme change.
+  const hazard = CSSVAR("--hazard"), alert = CSSVAR("--alert"), accent = CSSVAR("--accent");
+  const STAT_COLOR = {none_:hazard, visit:alert, study:alert, sched:accent, noact:line};
   const m = mpp();
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle = surf; ctx.fillRect(0,0,W,H);
@@ -587,11 +589,11 @@ function draw(){
     ctx.beginPath();
     rg.pts.forEach((p,i) => i ? ctx.lineTo(sx(p[0]), sy(p[1])) : ctx.moveTo(sx(p[0]), sy(p[1])));
     ctx.closePath();
-    ctx.fillStyle = COLOR[st(b.key)];
+    ctx.fillStyle = STAT_COLOR[st(b.key)];
     ctx.globalAlpha = on ? (selected && selected.key === b.key ? 0.30 : 0.13) : 0.05;
     ctx.fill();
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = COLOR[st(b.key)];
+    ctx.strokeStyle = STAT_COLOR[st(b.key)];
     ctx.globalAlpha = on ? 0.55 : 0.15;
     ctx.lineWidth = selected && selected.key === b.key ? 2 : 1;
     ctx.stroke();
@@ -653,7 +655,7 @@ function draw(){
     const rad = (mode === "block" ? 3.4 : 2.8) + 6 * Math.sqrt(v/maxV);
     const isSel = selected && selected.key === it.key;
     ctx.beginPath(); ctx.arc(X, Y, isSel ? rad+3.5 : rad, 0, 6.2832);
-    ctx.fillStyle = COLOR[st(it.key)];
+    ctx.fillStyle = STAT_COLOR[st(it.key)];
     ctx.globalAlpha = on ? 0.9 : 0.18; ctx.fill(); ctx.globalAlpha = 1;
     ctx.lineWidth = isSel ? 2.5 : 1;
     ctx.strokeStyle = isSel ? ink : card;
@@ -802,7 +804,8 @@ function heads(){
        <div class="num">All</div><div class="num">Tows</div><div class="num">Dwellings</div>
        <div class="num">Per 1k dwell.</div><div>Status</div>`
     : `<div>Address</div><div>District</div><div class="num">Calls 12mo</div><div class="num">All</div>
-       <div class="num">Vehicles</div><div class="num">Tows</div><div class="num">On block</div><div>Status</div>`;
+       <div class="num">Vehicles</div><div class="num">Tows</div>
+       <div class="num" title="Doorways on this block still calling, counting this one. More than one means a fix aimed at just this address is probably the wrong scope -- read it as a block problem.">On block</div><div>Status</div>`;
   const s = el("sort"); s.innerHTML = "";
   SORTS[mode].forEach(([k, label]) => {
     const o = document.createElement("option"); o.value = k; o.textContent = label; s.appendChild(o);
@@ -844,7 +847,7 @@ function render(){
         `<span class="num hideS">${it.t}</span>` +
         `<span class="num hideS">${it.vs ? it.vd+"/"+it.vs : "\u2013"}</span>` +
         `<span class="num hideS">${it.w}</span>` +
-        `<span class="num hideS">${it.nb > 1 ? `<span class="flag">${it.nb}</span>` : "1"}</span>` +
+        `<span class="num hideS" title="${it.nb > 1 ? `${it.nb} doorways on this block are still calling -- a block-level problem, not just this address.` : "No other doorway on this block is still calling."}">${it.nb > 1 ? `<span class="flag">${it.nb}</span>` : "1"}</span>` +
         `<span><span class="pill ${meta.pill}">${meta.label}</span></span>`;
     b.onclick = () => {
       openKey = openKey === it.key ? null : it.key;
