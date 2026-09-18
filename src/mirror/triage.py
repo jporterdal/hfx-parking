@@ -82,6 +82,12 @@ def record(conn, violation_type, scope, item_key, decision, note=None, role=None
     the caller gets the value Postgres actually stored (in particular
     `updated_at`, which the database sets) rather than one it merely sent.
 
+    `updated_at` is `clock_timestamp()`, not `now()`: `now()` is the start of
+    the request's transaction (begun when its connection was opened), so a
+    later writer whose connection opened before an earlier writer's whole
+    request would be stamped with an earlier changed-time than the row it
+    overwrote. The changed-time is the moment of the write.
+
     Raises `ValueError` for a `scope` outside `VALID_SCOPES` or a missing
     `item_key`/`decision`, so a caller such as `server.py`'s route can turn
     that into a 400 before it becomes a database round trip that could only
@@ -101,13 +107,13 @@ def record(conn, violation_type, scope, item_key, decision, note=None, role=None
         cur.execute(
             """
             INSERT INTO triage_decisions
-                (violation_type, scope, item_key, decision, note, role)
-            VALUES (%s, %s, %s, %s, %s, %s)
+                (violation_type, scope, item_key, decision, note, role, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, clock_timestamp())
             ON CONFLICT (violation_type, scope, item_key) DO UPDATE SET
                 decision = EXCLUDED.decision,
                 note = EXCLUDED.note,
                 role = EXCLUDED.role,
-                updated_at = now()
+                updated_at = clock_timestamp()
             RETURNING scope, item_key, decision, note, role, updated_at
             """,
             (violation_type, scope, item_key, decision, note or None,

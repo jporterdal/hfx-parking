@@ -30,7 +30,8 @@ Normalised, and nothing else (each is a presentation rule of the export, not a f
 the "Violation Type" column, the preamble/filter/clock/limit rows (checked separately for
 the filter values only), the export's header labels (mapped to the JSON keys they carry),
 upper-case text shown title-cased (the app's rule), a missing district shown "?", the
-median gap shown as whole days and lat/lon to 6 decimals, a missing value shown as ""
+median gap shown as whole days and lat/lon to 6 decimals, the served JSON rows' rank
+index `i` (checked to equal the row's position, then dropped), a missing value shown as ""
 in the CSV and as an en dash in the HTML brief. A cell whose numeric value differs is
 never normalised away.
 
@@ -354,9 +355,6 @@ def assert_no_difference(diff, what):
 # ------------------------------------------------------------------------ tests
 
 
-# Unfinished: the JSON rows carry a rank index `i` that derive's rows do not; drop it from
-# the served JSON rows before diff_csv (test bug, not a product defect).
-@pytest.mark.xfail(strict=True, reason="unfinished, see orchestration-progress/worker-J.md")
 @pytest.mark.parametrize("name", list(FILTER_SETS))
 def test_served_rows_equal_derives_rows_key_by_key_on_every_surface(world, tmp_path, name):
     conn, client = world
@@ -371,9 +369,16 @@ def test_served_rows_equal_derives_rows_key_by_key_on_every_surface(world, tmp_p
     assert exp_d, name
     assert any(r["w"] > 0 for r in exp_d) and any(r["w"] == 0 for r in exp_d)
 
-    # JSON: typed cells, keyed by address / block id, order-sensitive
-    assert_no_difference(rf.diff_csv(exp_d, got["door"]["rows"], "a"), f"{name}: JSON doorways")
-    assert_no_difference(rf.diff_csv(exp_b, got["blk"]["blocks"], "bk"), f"{name}: JSON blocks")
+    # JSON: typed cells, keyed by address / block id, order-sensitive. The served JSON
+    # rows carry a rank index `i` that derive's rows do not have; it is checked here to
+    # be exactly the row's position and then dropped, the one key normalised away.
+    json_d, json_b = got["door"]["rows"], got["blk"]["blocks"]
+    assert [r["i"] for r in json_d] == list(range(len(json_d)))
+    assert [r["i"] for r in json_b] == list(range(len(json_b)))
+    json_d = [{k: v for k, v in r.items() if k != "i"} for r in json_d]
+    json_b = [{k: v for k, v in r.items() if k != "i"} for r in json_b]
+    assert_no_difference(rf.diff_csv(exp_d, json_d, "a"), f"{name}: JSON doorways")
+    assert_no_difference(rf.diff_csv(exp_b, json_b, "bk"), f"{name}: JSON blocks")
     assert got["door"]["count"] == len(exp_d) and got["blk"]["count"] == len(exp_b)
 
     # CSV export

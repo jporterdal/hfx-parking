@@ -768,7 +768,7 @@ def test_a_stopped_sync_reads_overdue_on_the_page_when_the_newest_call_is_old_to
         client, clean_db, monkeypatch):
     """9.2.2 with old data as well: still overdue, still not showing an upcoming
     update. (What else the banner then says about whose limit it is: see the
-    xfail below.)"""
+    test below.)"""
     freeze_server_clock(monkeypatch, NOW)
     _seed_stalled_sync_and_old_data(clean_db)
 
@@ -781,19 +781,16 @@ def test_a_stopped_sync_reads_overdue_on_the_page_when_the_newest_call_is_old_to
 
 
 # ------------------------------------------------------------- defects found
-# Each of the following asserts what the spec/design require and fails against
-# the product as built. See the report for the reproduction of each.
+# Each of the following asserts what the spec/design require; they were found
+# failing against the product as built and have since been fixed (A-D).
 
 
 @_NEEDS_NODE
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT D: a stalled sync (overdue) with an old newest call is labelled HRM's "
-    "limit -- the banner says 'this sync is caught up with HRM ... not a problem "
-    "with this mirror' beside 'overdue'; behind_source cannot know, and "
-    "_behind_reason/the banner ignore next_update.overdue (violates design M4 "
-    "whose-limit; hosted-triage-app 'The source is the limit' only applies while "
-    "'this system is syncing successfully')"))
 def test_a_stalled_sync_is_never_labelled_as_HRMs_limit(client, clean_db, monkeypatch):
+    """9.2 defect D, fixed: a stalled (overdue) sync with an old newest call is not
+    called "caught up with HRM" and its old data is not put on HRM's schedule
+    (design M4; hosted-triage-app "The source is the limit" only applies while
+    "this system is syncing successfully")."""
     freeze_server_clock(monkeypatch, NOW)
     _seed_stalled_sync_and_old_data(clean_db)
 
@@ -802,14 +799,15 @@ def test_a_stalled_sync_is_never_labelled_as_HRMs_limit(client, clean_db, monkey
     assert payload["next_update"]["overdue"] is True
     assert "this sync is caught up with HRM" not in out["text"]
     assert "not a problem with this mirror" not in out["text"]
+    assert "The most recent call in the data is 40 days old. This sync is overdue, so this " \
+        "mirror cannot tell whether HRM has published since" in out["text"]
+    assert "stale" in out["classes"] and "overdue" in out["classes"]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT D (API half): /api/freshness `behind_reason` says 'a lag here belongs to "
-    "HRM's publishing schedule, not to this sync' while next_update.overdue is true "
-    "(and the CSV/brief print it next to the overdue line)"))
 def test_the_api_does_not_attribute_the_lag_to_HRM_while_the_sync_is_overdue(
         client, clean_db, monkeypatch):
+    """9.2 defect D, API half, fixed: `behind_reason` (also printed by the CSV and
+    the brief next to the overdue line) does not blame HRM's schedule."""
     freeze_server_clock(monkeypatch, NOW)
     _seed_stalled_sync_and_old_data(clean_db)
 
@@ -817,6 +815,8 @@ def test_the_api_does_not_attribute_the_lag_to_HRM_while_the_sync_is_overdue(
 
     assert payload["next_update"]["overdue"] is True
     assert "not to this sync" not in (payload["behind_reason"] or "")
+    assert "HRM's publishing schedule, not" not in (payload["behind_reason"] or "")
+    assert "this sync is overdue" in payload["behind_reason"]
 
 
 @_NEEDS_NODE
@@ -933,13 +933,11 @@ def test_the_overdue_banner_does_not_name_a_length_it_was_not_given(client, clea
 
 
 @_NEEDS_NODE
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT C: with a stopped sync and >=3 past publishes, next_source_estimate.estimated_next "
-    "(last publish + median gap) is already in the past, and the banner still renders it as "
-    "'HRM itself is estimated to next publish around <past date>' (a date that has passed "
-    "presented as upcoming; _next_source_estimate never compares it with now)"))
 def test_a_passed_estimate_of_HRMs_next_publish_is_not_shown_as_upcoming(
         client, clean_db, monkeypatch):
+    """9.2 defect C, fixed: with a stopped sync and three past publishes,
+    `estimated_next` (last publish + median gap) is already in the past; the banner
+    does not present that date as upcoming."""
     freeze_server_clock(monkeypatch, NOW)
     edits = [NOW - 60 * DAY, NOW - 53 * DAY, NOW - 46 * DAY]          # weekly; next was due 39 days ago
     stopped = NOW - 21 * DAY
@@ -954,3 +952,113 @@ def test_a_passed_estimate_of_HRMs_next_publish_is_not_shown_as_upcoming(
     assert payload["next_update"]["overdue"] is True
     assert f"estimated to next publish around {out['probes'][payload_iso(NOW - 39 * DAY)]}" \
         not in out["text"]
+    assert estimate["passed"] is True
+    assert f"HRM was estimated to publish around {out['probes'][payload_iso(NOW - 39 * DAY)]}, " \
+        "but this mirror has not recorded a newer publish -- an estimate, not a promise" in out["text"]
+    assert "HRM itself is estimated to next publish" not in out["text"]
+
+
+@_NEEDS_NODE
+@pytest.mark.parametrize("passed_by,expected_passed", [
+    (-HOUR, False), (-SECOND, False), (datetime.timedelta(0), False),
+    (SECOND, True), (HOUR, True), (30 * DAY, True),
+], ids=["due-in-1h", "due-in-1s", "exactly-now", "passed-1s", "passed-1h", "passed-30d"])
+def test_an_estimate_is_worded_as_upcoming_only_while_it_is_not_in_the_past(
+        client, clean_db, monkeypatch, passed_by, expected_passed):
+    """9.2 defect C, boundary: `passed_by` is how long after the estimated publish
+    "now" is, with a healthy sync so nothing else is being said about the sync. The
+    instant itself is still upcoming (the same boundary as the sync's own due time);
+    one second later it is worded in the past."""
+    freeze_server_clock(monkeypatch, NOW)
+    estimated = NOW - passed_by
+    edits = [estimated - 21 * DAY, estimated - 14 * DAY, estimated - 7 * DAY]     # weekly
+    seed_clocks(clean_db, success=NOW - HOUR, due=NOW + 23 * HOUR, source_edit=edits[-1])
+    _publish_history(clean_db, "service_requests", *edits)
+    seed_driveway_call(clean_db, 9302, "1 FIRST ST, HALIFAX", edits[-1])
+
+    payload, out = banner_for(client, monkeypatch, probes=(payload_iso(estimated),))
+
+    estimate = payload["next_source_estimate"]
+    assert estimate["known"] is True and at(estimate["estimated_next"]) == estimated
+    assert estimate["passed"] is expected_passed
+    shown = out["probes"][payload_iso(estimated)]
+    assert (f"HRM itself is estimated to next publish around {shown} " in out["text"]) is (not expected_passed)
+    assert (f"HRM was estimated to publish around {shown}, " in out["text"]) is expected_passed
+    assert "an estimate, not a promise" in out["text"]
+    assert payload["next_update"]["overdue"] is False
+
+
+@_NEEDS_NODE
+def test_the_estimate_is_not_flagged_passed_when_it_is_not_known(client, clean_db, monkeypatch):
+    freeze_server_clock(monkeypatch, NOW)
+    seed_clocks(clean_db, success=NOW - HOUR, due=NOW + 23 * HOUR, source_edit=NOW - 30 * DAY)
+    _publish_history(clean_db, "service_requests", NOW - 30 * DAY)
+    seed_driveway_call(clean_db, 9303, "1 FIRST ST, HALIFAX", NOW - 30 * DAY)
+
+    payload, out = banner_for(client, monkeypatch)
+
+    assert payload["next_source_estimate"]["known"] is False
+    assert payload["next_source_estimate"]["passed"] is False
+    assert "HRM was estimated" not in out["text"]
+
+
+@_NEEDS_NODE
+@pytest.mark.parametrize("overdue_for,overdue", [
+    (-HOUR, False), (-SECOND, False), (datetime.timedelta(0), False),
+    (SECOND, True), (HOUR, True), (21 * DAY, True),
+], ids=["1h-before-overdue", "1s-before-overdue", "at-grace-end", "overdue-1s", "overdue-1h", "overdue-21d"])
+@pytest.mark.parametrize("behind", [False, True], ids=["not-behind", "behind-source"])
+def test_whose_limit_the_banner_and_api_name_at_the_overdue_boundary(
+        client, clean_db, monkeypatch, overdue_for, overdue, behind):
+    """9.2 defect D, boundary: `overdue_for` is how long after the END of the grace
+    period "now" is; the newest call is 40 days old throughout. Not overdue and not
+    behind: HRM's schedule is the limit (the wording tests/test_app.py pins). Overdue
+    and not behind: nobody's limit can be named, and HRM is not blamed. Behind
+    (whether or not overdue): this system's limit, in both the banner and the API."""
+    freeze_server_clock(monkeypatch, NOW)
+    due = NOW - GRACE - overdue_for
+    old = NOW - 40 * DAY
+    seed_clocks(clean_db, success=due - DAY, due=due, source_edit=old)
+    insert_pulled_edit(clean_db, "service_requests", old)
+    insert_pulled_edit(clean_db, "custom_fields", old)
+    if behind:
+        set_layer_state(clean_db, "service_requests", source_last_edit=NOW - 2 * DAY)
+    seed_driveway_call(clean_db, 9304, "1 FIRST ST, HALIFAX", old)
+
+    payload, out = banner_for(client, monkeypatch)
+    text, reason = out["text"], payload["behind_reason"]
+
+    assert payload["next_update"]["overdue"] is overdue
+    assert payload["behind_source"] is behind
+    assert payload["stale_call_warning"]["stale"] is True
+    assert ("fallen behind HRM" in text) is behind
+    assert ("HRM has published since this layer was last pulled" == reason) is behind
+    hrm_limit = "this sync is caught up with HRM -- the gap is a limit of HRM's own publishing schedule"
+    unknown = "This sync is overdue, so this mirror cannot tell whether HRM has published since"
+    assert (hrm_limit in text) is (not overdue and not behind)
+    assert (unknown in text) is (overdue and not behind)
+    assert ("not to this sync" in reason) is (not overdue and not behind)
+    assert ("this sync is overdue, so this mirror cannot tell" in reason) is (overdue and not behind)
+    if overdue:
+        assert "not a problem with this mirror" not in text
+        assert "not to this sync" not in reason
+
+
+@_NEEDS_NODE
+def test_an_overdue_sync_with_recent_data_does_not_blame_HRM_either(client, clean_db, monkeypatch):
+    """The overdue sync whose newest call is fresh (no stale warning): the banner has
+    no whose-limit sentence at all, but the API's `behind_reason` must not say a lag
+    belongs to HRM's schedule."""
+    freeze_server_clock(monkeypatch, NOW)
+    seed_clocks(clean_db, success=NOW - 21 * DAY, due=NOW - 20 * DAY, source_edit=NOW - 22 * DAY)
+    insert_pulled_edit(clean_db, "service_requests", NOW - 22 * DAY)
+    insert_pulled_edit(clean_db, "custom_fields", NOW - 22 * DAY)
+    seed_driveway_call(clean_db, 9305, "1 FIRST ST, HALIFAX", NOW - 2 * DAY)
+
+    payload, out = banner_for(client, monkeypatch)
+
+    assert payload["next_update"]["overdue"] is True and payload["behind_source"] is False
+    assert payload["stale_call_warning"]["stale"] is False
+    assert "not to this sync" not in payload["behind_reason"]
+    assert payload["behind_reason"].startswith("this sync is overdue, so this mirror cannot tell")
+    assert "publishing schedule" not in out["text"] and "caught up" not in out["text"]

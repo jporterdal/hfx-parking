@@ -279,31 +279,43 @@ def _vehicle_conclusion(vehicles):
             f"{seen}, need >= {MIN_VEHICLE_SAMPLE})",
             False,
         )
-    # Rounded the same way `compute_type` rounds `vehicles["share"]` for the
-    # JSON/table output, so the percentage quoted in this sentence never
-    # disagrees with the percentage sitting next to it in the structured field.
+    # The classification compares the same 3-decimal share `compute_type` stores
+    # in `vehicles["share"]`. The percentage quoted in the sentence is rounded
+    # ONCE, from the unrounded ratio (`_unique_pct_text`): rounding to 3 decimals
+    # first and then to a whole percent tips a ratio such as 2413/2528 = 95.45%
+    # over the .5 boundary (0.955 -> "96%") where the live brief and
+    # `/doorways` `summary.unique_pct` say 95 (task 9.4, concern 24).
     share = round(distinct / seen, 3)
+    pct = _unique_pct_text(distinct, seen)
     if share >= MOSTLY_DISTINCT_SHARE:
         return (
             "mostly_distinct",
-            f"vehicles at listed addresses are mostly distinct ({share:.0%} of "
+            f"vehicles at listed addresses are mostly distinct ({pct} of "
             f"{seen} seen), so repeat calls are not mainly one vehicle returning",
             True,
         )
     if share <= SUBSTANTIAL_REPEAT_SHARE:
         return (
             "substantial_repeat",
-            f"vehicles at listed addresses substantially repeat ({share:.0%} of "
+            f"vehicles at listed addresses substantially repeat ({pct} of "
             f"{seen} seen), so repeat calls are largely the same vehicle "
             f"returning",
             True,
         )
     return (
         "mixed",
-        f"vehicle uniqueness at listed addresses is mixed ({share:.0%} of "
+        f"vehicle uniqueness at listed addresses is mixed ({pct} of "
         f"{seen} seen), neither mostly distinct nor mostly repeat",
         True,
     )
+
+
+def _unique_pct_text(distinct, seen):
+    """`distinct` as a whole per cent of `seen`, rounded once from the unrounded
+    ratio and written exactly as the live brief writes it (`hotspots.py`'s
+    `100 * distinct / seen:.0f`), so a served sentence and the brief agree.
+    """
+    return f"{100 * distinct / seen:.0f}%"
 
 
 # --------------------------------------------------------------- own conclusion
@@ -439,7 +451,9 @@ def _table(all_figures):
             f"{tow['not_towed']['recurrence_pct']:.1f}%"
             if tow["not_towed"]["recurrence_pct"] is not None else "n/a"
         )
-        share = f"{veh['share']:.0%}" if veh["share"] is not None else "n/a"
+        # From the counts, not from the stored 3-decimal `share`: formatting that to a
+        # whole percent would round twice (0.955 -> "96%" for 2413/2528 = 95.45%).
+        share = _unique_pct_text(veh["distinct"], veh["seen"]) if veh["seen"] else "n/a"
         lines.append(
             f"{canonical:<38} {fig['population']:>7} {tow['towed']['calls']:>8} "
             f"{rec_towed:>10} {rec_not:>8} {share:>10} "

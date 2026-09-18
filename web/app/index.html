@@ -828,16 +828,24 @@ let TOW_KEY = null;
      * published) is this system's own problem, checked first because it is
      * the one that needs attention; a stale newest-call with no behind-source
      * verdict is HRM's own publishing schedule going quiet, not a defect
-     * here, so it is worded as a limit, not a fault. */
+     * here, so it is worded as a limit, not a fault. That only holds while the
+     * sync is completing: an overdue sync (`nextUpdate.overdue`) has stopped
+     * polling, so "caught up with HRM" is no longer known and the age of the
+     * data is not put on HRM's schedule (design.md M4). */
     if (f.behind_source){
       parts.push("This mirror has fallen behind HRM: the source has published "
         + "data this sync has not yet pulled -- the delay belongs to this "
         + "system, not to HRM's publishing schedule.");
       if (header) header.classList.add("behind");
     } else if (warning && warning.stale){
-      parts.push(`The most recent call in the data is ${Math.round(warning.days_old)} `
-        + "days old, but this sync is caught up with HRM -- the gap is a limit "
-        + "of HRM's own publishing schedule, not a problem with this mirror.");
+      parts.push(nextUpdate.overdue
+        ? `The most recent call in the data is ${Math.round(warning.days_old)} `
+          + "days old. This sync is overdue, so this mirror cannot tell whether HRM "
+          + "has published since -- the age of the data cannot be put down to HRM's "
+          + "publishing schedule until a sync completes."
+        : `The most recent call in the data is ${Math.round(warning.days_old)} `
+          + "days old, but this sync is caught up with HRM -- the gap is a limit "
+          + "of HRM's own publishing schedule, not a problem with this mirror.");
       if (header) header.classList.add("stale");
     }
     /* Task 7.2b: a fourth, distinct freshness state -- when HRM *itself* is
@@ -854,7 +862,15 @@ let TOW_KEY = null;
      * does not read a blank or missing line as a broken feature. */
     const sourceEstimate = f.next_source_estimate || {};
     parts.push(
-      sourceEstimate.known
+      sourceEstimate.known && sourceEstimate.passed
+        /* The estimate is already behind us (`passed`, from the server): a
+         * date that has gone by is never worded as upcoming, so say that the
+         * estimated publish has not been seen. */
+        ? `HRM was estimated to publish around ${fmt(sourceEstimate.estimated_next)}, `
+          + "but this mirror has not recorded a newer publish -- an estimate, not a "
+          + `promise, from the typical gap across ${sourceEstimate.observed_intervals} `
+          + "observed intervals between its past publishes."
+      : sourceEstimate.known
         ? `HRM itself is estimated to next publish around ${fmt(sourceEstimate.estimated_next)} `
           + `-- an estimate, not a promise, from the typical gap across `
           + `${sourceEstimate.observed_intervals} observed intervals between its past publishes.`

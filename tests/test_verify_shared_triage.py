@@ -642,13 +642,10 @@ def _second_writer_connected_first_app():
     return early, app_server.create_app(conn_factory=lambda: early)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "updated_at is Postgres now() = the START of the request's transaction (begun by "
-    "mirror.db.connect()'s SET search_path), not the moment of the write: a later "
-    "writer whose connection was opened before an earlier writer's whole request "
-    "is stamped with an earlier changed-time than the row it overwrote"))
 def test_the_last_writers_changed_time_is_later_even_if_its_connection_opened_first(
         shared_list, viewer_a):
+    """The changed-time is the moment of the write (`clock_timestamp()`), not the
+    start of the request's transaction (`now()`, begun when the connection opened)."""
     key = _items(viewer_a)[0]["1 First St"]
     early, app_b = _second_writer_connected_first_app()   # B's transaction begins here
     a_row = _post(viewer_a, X, "doorway", key, "visit", "A", COORDINATOR).get_json()   # A completes
@@ -656,3 +653,17 @@ def test_the_last_writers_changed_time_is_later_even_if_its_connection_opened_fi
     current = _decisions(viewer_a)[("doorway", key)]
     assert (current["role"], current["decision"]) == (OFFICER, "noact"), "B is the last writer"
     assert _instant(b_row["updated_at"]) > _instant(a_row["updated_at"])
+
+
+def test_a_first_decision_is_stamped_at_the_write_not_at_the_start_of_its_transaction(
+        shared_list):
+    """The INSERT half of the same fix: a decision recorded for the first time, from a
+    connection opened (its transaction begun) before the wall-clock moment `after`,
+    carries a changed-time no earlier than `after`."""
+    import time
+    key = _items(_viewer())[0]["1 First St"]
+    early, app_b = _second_writer_connected_first_app()   # opens its connection, and its one request
+    time.sleep(0.05)
+    after = datetime.datetime.now(datetime.UTC)
+    row = _post(app_b.test_client(), X, "doorway", key, "visit", "first", COORDINATOR).get_json()
+    assert _instant(row["updated_at"]) >= after

@@ -540,7 +540,7 @@ def _call_staleness(most_recent_call_date, now=None):
     }
 
 
-def _behind_reason(freshness):
+def _behind_reason(freshness, sync_overdue=False):
     """Task 7.2: attribute `behind_source`'s aggregate verdict to whichever
     system owns it, by reusing `mirror.status.layer_freshness`'s own
     per-layer `behind_reason` rather than recomputing the wording here.
@@ -555,6 +555,13 @@ def _behind_reason(freshness):
     enough to call the whole mirror behind (design.md M3 treats the two
     Cityworks layers as one publish event four minutes apart), so a viewer
     does not need to know which layer specifically.
+
+    `sync_overdue` (`_next_update_state`'s `overdue`) withdraws that second
+    half: "not behind" only means the last *completed* poll saw nothing HRM had
+    not already published, and an overdue sync has stopped polling, so nothing
+    is known about HRM since. The lag is then not put on HRM's schedule (design
+    M4: never name the wrong system as the limit); a layer that is behind still
+    reports HRM's publish, which was seen before the sync stopped.
     """
     currency = [
         freshness["layers"][key] for key in status.CURRENCY_LAYERS
@@ -563,6 +570,12 @@ def _behind_reason(freshness):
     behind = next((v for v in currency if v["behind_source"]), None)
     if behind is not None:
         return behind["behind_reason"]
+    if sync_overdue:
+        return (
+            "this sync is overdue, so this mirror cannot tell whether HRM has "
+            "published since its last completed poll -- the lag cannot be put "
+            "down to HRM's publishing schedule until a sync completes"
+        )
     not_behind = next((v for v in currency if not v["behind_source"]), None)
     return not_behind["behind_reason"] if not_behind else None
 
@@ -711,6 +724,7 @@ def _next_source_estimate(history, now=None):
         return {
             "known": False,
             "estimated_next": None,
+            "passed": False,
             "median_interval_days": None,
             "observed_intervals": len(intervals),
             "reason": (
@@ -721,9 +735,16 @@ def _next_source_estimate(history, now=None):
         }
     median = _median_timedelta(intervals)
     last_publish = history[-1]["source_last_edit"]
+    estimated_next = last_publish + median
     return {
         "known": True,
-        "estimated_next": _iso_utc(last_publish + median),
+        "estimated_next": _iso_utc(estimated_next),
+        # The estimate is behind us and nothing newer has been observed: HRM is
+        # later than its typical gap, or this mirror has not looked since. A
+        # client must not word it as upcoming (same rule as `next_update`'s
+        # `due_passed`, and the same boundary: the instant itself is not yet
+        # past).
+        "passed": now > estimated_next,
         "median_interval_days": round(median.total_seconds() / 86400, 1),
         "observed_intervals": len(intervals),
         "reason": None,
@@ -744,6 +765,7 @@ def _freshness_payload(freshness, now=None, history=None):
     function keeps working unchanged.
     """
     now = now or datetime.datetime.now(datetime.timezone.utc)
+    next_update = _next_update_state(freshness, now=now)
     return {
         "checked_at": _iso_utc(now),
         "most_recent_call_date": _iso_utc(freshness["most_recent_call_date"]),
@@ -751,9 +773,9 @@ def _freshness_payload(freshness, now=None, history=None):
         "last_attempt_at": _iso_utc(freshness["last_attempt_at"]),
         "next_due_at": _iso_utc(freshness["next_due_at"]),
         "behind_source": freshness["behind_source"],
-        "behind_reason": _behind_reason(freshness),
+        "behind_reason": _behind_reason(freshness, sync_overdue=next_update["overdue"]),
         "stale_call_warning": _call_staleness(freshness["most_recent_call_date"], now=now),
-        "next_update": _next_update_state(freshness, now=now),
+        "next_update": next_update,
         "next_source_estimate": _next_source_estimate(history or [], now=now),
     }
 

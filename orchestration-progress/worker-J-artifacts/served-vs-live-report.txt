@@ -1,0 +1,35 @@
+OK   JSON /doorways vs live watchlist.csv: same key set (351 live / 351 served): 351 compared, 0 mismatches
+OK   JSON /doorways vs live watchlist.csv: same order: 351 compared, 0 mismatches
+OK   JSON /doorways vs live watchlist.csv: every listed field (17 fields): 5967 compared, 0 mismatches
+OK   JSON /blocks vs live blocks.csv: same key set (70 live / 70 served): 70 compared, 0 mismatches
+OK   JSON /blocks vs live blocks.csv: same order: 70 compared, 0 mismatches
+OK   JSON /blocks vs live blocks.csv: every listed field (11 fields): 770 compared, 0 mismatches
+OK   served tows/calls_total == live tow_rate (exact float): 351 compared, 0 mismatches
+OK   live doorway block_dwellings == served block dwellings (blocks that are listed): 273 compared, 0 mismatches
+OK   export.csv: 'Violation Type' column is 'Blocking Driveway' on every row: 421 compared, 0 mismatches
+OK   export.csv preamble doorway_count/block_count/latest_call_date: 3 compared, 0 mismatches
+OK   export.csv DOORWAYS vs live (position + every column): 5967 compared, 0 mismatches
+OK   export.csv BLOCKS vs live (position + every column): 770 compared, 0 mismatches
+OK   export HTML doorway table vs live (position + every column, en dash = missing): 5967 compared, 0 mismatches
+OK   export HTML block table vs live (position + every column, en dash = missing): 770 compared, 0 mismatches
+OK   export HTML headline counts: 2 compared, 0 mismatches
+OK   watchlist.md header figures vs served summary/figures/latest/filters (9 figures): 9 compared, 0 mismatches
+OK   watchlist.md tow count within served towed calls .. + excluded calls: 1 compared, 0 mismatches
+OK   watchlist.md table rows (top 40) vs served rows by rank, 10 cells each: 400 compared, 0 mismatches
+OK   blocks.md header figures vs served blocks/doorways: 3 compared, 0 mismatches
+OK   blocks.md table rows (top 30) vs served rows by rank, 8 cells each: 240 compared, 0 mismatches
+DIFF figures.vehicles (distinct/seen/doorways and the % in the stored sentence) vs live brief: 4 compared, 1 mismatches
+       figures.vehicles.conclusion says 96% of 2528 seen; live brief says 95 per cent unique (2413/2528 = 95.45%)
+TOTAL mismatches: 1
+
+Normalisations:
+- address, street, community, block streets/worst doorway/addresses: live upper-case text compared to served text after str.title() (the served rule)
+- district: live value compared to str(value or '?') (the served rule; live None -> '?')
+- missing owner/block/community: live '' compared to served '' (JSON) / '' (CSV) / en dash never applies to these text cells (checked as observed)
+- median gap: served value is round(live median) whole days (live is a float such as 9.0 or 9.5); compared as int(served) == round(float(live)); half-day cases counted
+- lat/lon: served is round(x, 6); compared as served == round(float(live), 6); max absolute difference reported
+- exports: header row labels replaced by the JSON keys they carry (Address->a ...); 'Violation Type' column removed after checking every row carries the type name; preamble/filter rows/clocks/notes/limits/tow sentence not compared (only the doorway and block tables, the counts and latest date)
+- HTML export: missing value shown as en dash compared to JSON null; thousands separators not present in the served cells (none to strip)
+- live tow_rate is a float ratio the app does not serve: compared as tows/calls_total == float(tow_rate) exactly
+- live brief cells: '12 of 15' split to vd/vs; 'N d' and '-' gap to int/None; 'N,NNN' dwellings to int; '-' rate to None-or-0
+- live block brief/CSV 'Calls in scope' and tow count are not served as such: compared through figures.calls_raw and summary.tow_pct (1 dp) with a range check on the tow count

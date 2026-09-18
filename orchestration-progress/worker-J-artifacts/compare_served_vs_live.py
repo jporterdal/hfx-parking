@@ -160,7 +160,8 @@ def compare_rows(name, live_rows, exp_fn, key, served_rows, keyfield, fields):
             else ["order differs"])
     fm = []
     n = 0
-    for k, e, raw in exp:
+    for _k, e, raw in exp:
+        k = e[keyfield]
         s = served_by.get(k)
         if not s:
             continue

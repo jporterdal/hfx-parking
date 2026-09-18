@@ -5,46 +5,28 @@
 `dispatch-plan.md` holds the dependency DAG; this file holds *state* — what is done, what is in
 flight, and the conventions the pools have been run under.
 
-## POOL 12 DISPATCHED (2026-09-18, fresh 5-hour window) — supersedes "no workers are running" below
+## STATE after Pool 12 (2026-09-18): no workers running; one decision left for the user
 
-State verified before dispatch: tree clean at `6347c79`, suite green (8 strict xfails), `openspec validate
---strict` clean. Two Sonnet workers, disjoint files: **I'** (9.2 defects C, D; 9.6 changed-time race E:
-`server.py`, `index.html`, `src/mirror/triage.py`, `tests/test_verify_unreachable_and_overdue.py`,
-`tests/test_verify_shared_triage.py`) and **J'** (9.4 served-vs-live comparison; concern 24, which J' may
-fix in `src/mirror/per_type.py` with a test; `tests/test_verify_served_matches_derive.py`). User decisions
-this session: one more live run against HRM is allowed only if the freshness gate shows the mirror has
-advanced (1 of max 2 already used); concern 24 is to be FIXED with a test if confirmed; concerns 16, 17,
-20, 21 stay with the user. If this note is still here and no workers are running, the session was
-interrupted: verify with `git status`/`git diff`, per "Read this first".
-
-## STOPPED MID-CHANGE — Pool 11 was cut short by the user's usage limit (2026-09-18)
-
-**No workers are running.** Pool 11 (Worker I: 9.2's defects and 9.6's race; Worker J: task 9.4) was
-stopped at the user's request when they reached 95% of their 5-hour limit. Read these first, then verify
-with the commands below (an agent's report is a claim):
-- `orchestration-progress/worker-I.md` and `orchestration-progress/worker-J.md` — each worker's final state
-  and the exact next steps. `orchestration-progress/worker-J-artifacts/` holds the kept live-run outputs
-  (`live/`, 72 KB), `reconcile-report.txt` and the unrun `compare_served_vs_live.py`, so 9.4 can resume
-  WITHOUT a second live run. Delete the whole `orchestration-progress/` directory when the change is archived.
-- **What landed and was verified (committed with this note):** defects A and B of 9.2 (concern 18);
-  the full suite is green at 831 tests with **8 strict xfails** (I: C 1, D 2, E 1; J: 4 in the unfinished
-  `tests/test_verify_served_matches_derive.py`); `openspec validate --strict` clean; the real mirror's
-  `mirror.triage_decisions` is still 0 rows and nothing real was written.
-- **What is NOT done:** defects C, D (9.2) and E (9.6's changed-time race); 9.4's served-vs-live comparison
-  and the offline test's fix. **9.2 and 9.4 are both still unticked.**
-
-**Resume plan (next session):** (1) `git status`, `python -m pytest -q -p no:cacheprovider`,
-`openspec validate mirror-hrm-data-and-host-app --strict`; (2) dispatch Worker I' for C, D, E (each has a
-strict-xfail test to un-xfail; details in concern 18/19 and `worker-I.md`); (3) Worker J' resumes 9.4 from
-`worker-J.md` (fix the `i` rank-key test bug, run `compare_served_vs_live.py`, then the scratch-copy
-mutation proof), and checks the "96% vs 95 per cent" finding (concern 24); (4) verify, tick 9.2 and 9.4,
-commit, and the change is ready for the user to archive (their browser check, concern 1, and the spec
-questions, concerns 17, 20, 21, remain theirs). The two workers touch disjoint files, except that
-Worker J' may need `src/mirror/per_type.py` if concern 24 is confirmed: give that file to J' alone.
+Pool 12 (Worker I': 9.2 defects C, D and 9.6's changed-time race E; Worker J': 9.4 and concern 24; both
+Sonnet, ~217k tokens: I' 95k, J' 122k, no re-dispatch, no collisions) finished and was verified by the
+orchestrator: full suite **864 passed, 0 xfails** (every strict xfail is now fixed and its marker removed),
+`openspec validate --strict` clean, `mirror.triage_decisions` still 0 rows, latest `sync_runs` still 16 Sep;
+the orchestrator re-ran the scratch-revert proofs for E and D itself (both fail when the fix is reverted).
+- **9.2 is TICKED** (defects A-D all fixed and proven). **9.6's defect E is fixed** (task was already ticked;
+  its caveat line now says so).
+- **9.4 is NOT ticked, on purpose.** Everything served matches the live run except one sentence (concern 24,
+  confirmed and fixed in `per_type.py`), but `/figures` serves a stored `type_figures` row (Driveway, computed
+  2026-09-16) that still says "96%" until the row is recomputed or the mirror version changes. Recomputing
+  writes to the real mirror, so it awaits the user; then tick 9.4. See the 9.4 line in `tasks.md`.
+- **For the user, not decided:** the four documents that print "96 per cent unique" (`README.md:94`,
+  `docs/parking-hotspots/product.md:36`, `docs/parking-hotspots/decisions.md:28`,
+  `docs/problem-selection/five-problems-research.md:172`); the browser check (concern 1); the spec questions
+  (concerns 16, 17, 20, 21).
+- After the 9.4 decision the change is ready for the user to archive. Delete this file, `dispatch-plan.md` and
+  `orchestration-progress/` (its `worker-J-artifacts/served-vs-live-report.txt` is the evidence for 9.4) then.
 
 **Interruption protocol (still in force):** the user watches a 5-hour limit and asked that at about 95% no
-new agent be dispatched and the session wrap up. The orchestrator cannot read that meter. Commit and update
-this file at every natural stopping point; never dispatch without first committing a note like this one.
+new agent be dispatched and the session wrap up. Commit and update this file at every natural stopping point.
 
 ## Read this first, before doing anything else
 
@@ -53,7 +35,7 @@ Verify before trusting anything below — an agent's report is a claim, not evid
 ```bash
 git status --short          # whose files changed
 git diff                    # what actually landed vs. what was claimed
-python -m pytest -q         # 831 tests as of the Pool 11 stop (8 strict xfails, see below), all green
+python -m pytest -q -o addopts=""   # 864 tests as of Pool 12, all green, no xfails (addopts is -q, which hides the summary)
 openspec validate mirror-hrm-data-and-host-app --strict
 ```
 
@@ -63,12 +45,12 @@ something nobody verified. This happened once already in this change (see "Histo
 
 ## State at last commit
 
-The **Pool 11 stop** (`git log -1`; before it, `8313cd2`, the Pool 10 checkpoint `16fe785` and the Pool 9
-checkpoint `197f8c7`). 831 tests collected, all green including **8 strict xfails** (known defects,
-below); `openspec validate --strict` clean.
+The **Pool 12 checkpoint** (`git log -1`; before it the Pool 11 stop `6347c79`, `8313cd2`, the Pool 10
+checkpoint `16fe785` and the Pool 9 checkpoint `197f8c7`). 864 tests, all green, no xfails;
+`openspec validate --strict` clean.
 
-Complete through: sections 1–8 entirely, and in section 9: **9.1, 9.3, 9.5, 9.6, 9.7, 9.8**.
-**Not done: 9.2 (four defects found, left unticked on purpose) and 9.4 (live baseline, not yet run).**
+Complete through: sections 1–8 entirely, and in section 9: **9.1, 9.2, 9.3, 9.5, 9.6, 9.7, 9.8**.
+**Not done: 9.4 (verified; waits on the user's decision to recompute the stored Driveway figures row).**
 Several completed tasks carry caveats in their `tasks.md` lines (7.7, 7.8, 8.4, 8.5, 8.7, 8.9, and all
 of 9.x especially); read them before treating a task as fully closed.
 
@@ -205,7 +187,7 @@ subdirectory next time.
     list a "watermark" among recorded sync outcomes; design leaves the grace period open while 7.2a set
     it from `POLL_INTERVAL`; `ROLE_OPTIONS` in the page has a third role, "Other", that spec and design
     do not name (and design M7 says the role is chosen "on entry", the spec "before recording").
-18. **9.2's four defects — A and B FIXED in Pool 11, C and D OPEN** (see the concern text below for what each was;
+18. ~~9.2's four defects~~ **ALL FIXED (A, B in Pool 11; C, D in Pool 12; 9.2 ticked).** Original notes: **9.2's four defects — A and B FIXED in Pool 11, C and D OPEN** (see the concern text below for what each was;
     A and B's xfail markers are removed, C's and D's three markers remain in
     `tests/test_verify_unreachable_and_overdue.py`). Original description: **9.2's four defects (held as strict xfails in `tests/test_verify_unreachable_and_overdue.py`):**
     (A) inside the grace window the banner reads "Next update expected <past time>"; (B) the overdue banner
@@ -215,7 +197,7 @@ subdirectory next time.
     sync is caught up with HRM ... not a problem with this mirror" and the API's `behind_reason` blames
     HRM's schedule (a design M4 whose-limit misstatement). All in `index.html` and `server.py`. **Fixing
     them needs the xfail markers removed**, and closes 9.2.
-19. **OPEN (not started in Pool 11):** **9.6's changed-time defect (strict xfail in `tests/test_verify_shared_triage.py`):** `updated_at = now()`
+19. ~~9.6's changed-time defect~~ **FIXED in Pool 12** (`clock_timestamp()` in `triage.record()`). Original: **9.6's changed-time defect (strict xfail in `tests/test_verify_shared_triage.py`):** `updated_at = now()`
     is the start of the request's transaction, so a later writer whose connection opened before an
     earlier writer's whole request can get an earlier changed-time. Worker 4 confirmed
     `clock_timestamp()` in the upsert fixes it. Minor but real.
@@ -235,7 +217,7 @@ subdirectory next time.
     `docs/` for `311` (a mention outside the four exclusion-record files fails it as a reference);
     `test_verify_view_export_agreement.py`'s node harness cuts the page script from `function vehicleThesis(`
     to the end of the header script and stubs `pageTypeName`/`TOW_KEY` (20 tests skip with `node` off PATH).
-24. **Possible served-vs-live discrepancy (Worker J, UNVERIFIED):** `/api/types/blocking-driveway/figures` says
+24. **CONFIRMED and fixed in code in Pool 12; the stored Driveway `type_figures` row still says 96% until recomputed (user's call, see State above).** Original: **Possible served-vs-live discrepancy (Worker J, UNVERIFIED):** `/api/types/blocking-driveway/figures` says
     "96% of 2528 seen" where the live brief says 95 per cent unique; J attributes it to double rounding at
     `src/mirror/per_type.py:285`. If confirmed it is a served figure that does not match the live run, which
     is exactly what 9.4 tests, and a product defect rather than a test bug. Check against the numbers
