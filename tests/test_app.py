@@ -23,6 +23,7 @@ import pytest
 from app import server as app_server
 from mirror import derive as mirror_derive
 from mirror import triage as mirror_triage
+from mirror import type_figures as mirror_type_figures
 
 pytestmark = pytest.mark.db
 
@@ -70,13 +71,15 @@ def insert_service_request(conn, object_id, request_id, address, date_initiated,
     conn.commit()
 
 
-def seed_call(conn, request_id, address, when, raw_label, towed="N", lat=0.5, lon=0.5):
+def seed_call(conn, request_id, address, when, raw_label, towed="N", lat=0.5, lon=0.5,
+             district="7"):
     """One call filed under `raw_label` -- any raw label
     `violation_types.RAW_LABEL_TO_CANONICAL` knows, so this seeds a call for
     whichever canonical type that label belongs to. `object_id` is just
     `request_id`; the two id spaces never need to differ in a test.
     """
-    insert_service_request(conn, request_id, request_id, address, when, lat=lat, lon=lon)
+    insert_service_request(conn, request_id, request_id, address, when, lat=lat, lon=lon,
+                           district=district)
     base = request_id * 10
     insert_custom_field(conn, base, request_id, "Alleged Violation", raw_label)
     insert_custom_field(conn, base + 1, request_id, "Vehicle Was Towed", towed)
@@ -85,13 +88,14 @@ def seed_call(conn, request_id, address, when, raw_label, towed="N", lat=0.5, lo
     insert_custom_field(conn, base + 4, request_id, "Vehicle Colour", "BLUE")
 
 
-def seed_driveway_call(conn, request_id, address, when, towed="N", lat=0.5, lon=0.5):
+def seed_driveway_call(conn, request_id, address, when, towed="N", lat=0.5, lon=0.5,
+                       district="7"):
     """One call filed under a raw label the canonical 'Blocking Driveway' grouping
     covers exactly (`violation_types.raw_labels_for("Blocking Driveway")`) -- the
     type the app's default route serves.
     """
     seed_call(conn, request_id, address, when, "Blocking Driveway (DISPATCH)",
-              towed=towed, lat=lat, lon=lon)
+              towed=towed, lat=lat, lon=lon, district=district)
 
 
 def seed_two_doorway_block(conn):
@@ -208,23 +212,26 @@ def test_index_served_at_root_with_no_auth_and_no_build_step(client):
     assert 'fetch("/api/types")' in body
 
 
-def test_hardcoded_tow_thesis_is_guarded_outside_the_default_type(client):
-    """5.8's job is to serve each type's own stored tow-effect figure; this
-    task's job is only to make sure routing to a different type does not
-    silently show Blocking Driveway's hardcoded "44.7 per cent against 44.6
-    per cent" sentence as if it were that other type's own number (see
-    server.py and web/app/index.html's 5.2 comments on this hazard). This
-    pins the minimal guard's presence: the sentence is wrapped in
-    id="tow-thesis" and boot() blanks it whenever SLUG is not the default.
-    A full check would require a running browser at a non-default URL, which
-    this environment does not have -- see this task's report for that
-    caveat.
+def test_tow_thesis_reads_stored_figures_not_a_frozen_number(client):
+    """Task 5.8 removes both 5.2's stopgap (which blanked the tow-thesis
+    sentence for every non-default type rather than let it silently show
+    Blocking Driveway's own number under another type's view) and the frozen
+    number itself. The served markup now fetches
+    `/api/types/<slug>/figures` (`mirror.type_figures`, task 5.7's store) and
+    fills the sentence from whatever is stored for SLUG -- reporting "not
+    yet available" with the server's own stated reason when nothing is
+    stored, never a frozen number and never a per-request computation. A
+    full render-and-read check would need a running browser, which this
+    environment does not have; this pins that the frozen number and the
+    SLUG-based blanking guard are both gone, and that the fetch and the
+    fallback text are present in what ships.
     """
     body = client.get("/").get_data(as_text=True)
 
     assert 'id="tow-thesis"' in body
-    assert "44.7 per cent against 44.6 per cent" in body
-    assert "SLUG !== DEFAULT_SLUG" in body
+    assert "44.7 per cent against 44.6 per cent" not in body
+    assert "SLUG !== DEFAULT_SLUG" not in body
+    assert "/api/types/${SLUG}/figures" in body
     assert "not yet available" in body
 
 
@@ -349,6 +356,137 @@ def test_blocks_api_with_no_seeded_calls_returns_an_empty_list(client, clean_db)
     assert resp.get_json()["blocks"] == []
 
 
+# ---------------------------------------------- filter query parameters (5.5a, 5.5b)
+
+
+def seed_two_tier_doorways(conn):
+    """One census block, one doorway with five calls all older than 10 days
+    but inside 365 ("9 OLD ST"), one doorway with two calls inside every
+    window tested ("1 NEW ST") -- the same fixture shape
+    `tests/test_derive_recency.py`'s ranking test uses, seeded here to prove
+    the *route*, not just `derive_with_recency`, answers a widened
+    `recency_days` with a different listed set and a different top rank.
+    """
+    insert_census_area(conn, "12090999", SQUARE_RING)
+    for i, days_ago in enumerate((50, 55, 60, 65, 70)):
+        seed_driveway_call(conn, 6000 + i, "9 OLD ST, HALIFAX",
+                           LATEST - datetime.timedelta(days=days_ago))
+    seed_driveway_call(conn, 6100, "1 NEW ST, HALIFAX", LATEST)
+    seed_driveway_call(conn, 6101, "1 NEW ST, HALIFAX", LATEST - datetime.timedelta(days=5))
+
+
+def test_doorways_api_default_recency_omits_the_older_of_two_doorways(client, clean_db):
+    """Baseline for the next test: at the default (no query string), both
+    doorways are within 365 days, so both are listed and "9 OLD ST" (5 calls)
+    outranks "1 NEW ST" (2 calls).
+    """
+    seed_two_tier_doorways(clean_db)
+
+    resp = client.get("/api/types/blocking-driveway/doorways?min_calls=1")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert [r["a"] for r in data["rows"]] == ["9 Old St", "1 New St"]
+    assert data["filters"] == {
+        "district": None, "min_calls": 1, "min_doorways": 2,
+        "recur_days": 365, "recency_days": 365,
+    }
+
+
+def test_recency_days_query_param_changes_the_listed_set_and_ranking_over_http(client, clean_db):
+    """Task 5.5b's own verification clause, proven over the real HTTP surface
+    (not by calling `derive()`/`derive_with_recency` directly, which is the
+    gap 5.5's own note flagged): narrowing `recency_days` to 10 over the wire
+    drops "9 OLD ST" from the doorway list entirely, changing both which
+    doorways are listed and, since it was the top-ranked row a moment ago,
+    the ranking.
+    """
+    seed_two_tier_doorways(clean_db)
+
+    resp = client.get(
+        "/api/types/blocking-driveway/doorways?min_calls=1&recency_days=10"
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert [r["a"] for r in data["rows"]] == ["1 New St"]
+    assert data["filters"]["recency_days"] == 10
+
+
+def test_min_calls_query_param_changes_the_doorway_list_over_http(client, clean_db):
+    seed_two_doorway_block(clean_db)  # two doorways, two calls each
+
+    default_resp = client.get("/api/types/blocking-driveway/doorways")
+    widened_resp = client.get("/api/types/blocking-driveway/doorways?min_calls=1")
+
+    assert default_resp.get_json()["count"] == 2
+    assert widened_resp.get_json()["count"] == 2  # both already clear min_calls=2
+    # A threshold above what either doorway reaches drops both.
+    narrowed_resp = client.get("/api/types/blocking-driveway/doorways?min_calls=3")
+    assert narrowed_resp.get_json()["rows"] == []
+    assert narrowed_resp.get_json()["filters"]["min_calls"] == 3
+
+
+def test_district_query_param_narrows_the_doorway_list_over_http(client, clean_db):
+    seed_driveway_call(clean_db, 6201, "1 A ST, HALIFAX", LATEST, district="7")
+    seed_driveway_call(clean_db, 6202, "1 A ST, HALIFAX",
+                       LATEST - datetime.timedelta(days=1), district="7")
+    seed_driveway_call(clean_db, 6203, "2 B ST, HALIFAX", LATEST, district="9")
+    seed_driveway_call(clean_db, 6204, "2 B ST, HALIFAX",
+                       LATEST - datetime.timedelta(days=1), district="9")
+
+    resp = client.get("/api/types/blocking-driveway/doorways?district=9")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert [r["d"] for r in data["rows"]] == ["9"]
+    assert data["filters"]["district"] == "9"
+
+
+def test_min_doorways_query_param_changes_the_block_list_over_http(client, clean_db):
+    seed_two_doorway_block(clean_db)  # one block, two still-calling doorways
+
+    default_resp = client.get("/api/types/blocking-driveway/blocks")
+    assert default_resp.get_json()["count"] == 1  # min_doorways defaults to 2
+
+    narrowed_resp = client.get("/api/types/blocking-driveway/blocks?min_doorways=3")
+    assert narrowed_resp.get_json()["count"] == 0
+    assert narrowed_resp.get_json()["filters"]["min_doorways"] == 3
+
+
+def test_recur_days_query_param_is_distinct_from_recency_days_over_http(client, clean_db):
+    """design.md M11: the recurrence window only changes the `repeat_calls`
+    column; it must never change which doorways are listed. Two calls at the
+    same address, 40 days apart -- narrowing `recur_days` below 40 must drop
+    `repeat_calls` to 0 while the doorway itself stays listed (its
+    `calls_12mo` is governed by `recency_days`, untouched here).
+    """
+    seed_driveway_call(clean_db, 6301, "1 PAIR ST, HALIFAX", LATEST)
+    seed_driveway_call(clean_db, 6302, "1 PAIR ST, HALIFAX",
+                       LATEST - datetime.timedelta(days=40))
+
+    wide = client.get(
+        "/api/types/blocking-driveway/doorways?min_calls=1&recur_days=365"
+    ).get_json()
+    narrow = client.get(
+        "/api/types/blocking-driveway/doorways?min_calls=1&recur_days=10"
+    ).get_json()
+
+    assert wide["count"] == narrow["count"] == 1
+    assert wide["rows"][0]["m"] == narrow["rows"][0]["m"]  # calls_12mo unaffected
+    assert wide["rows"][0]["g"] is not None  # median_gap_days: repeat visible either way
+    assert narrow["filters"]["recur_days"] == 10
+
+
+def test_a_malformed_filter_value_falls_back_to_the_default_rather_than_500ing(client, clean_db):
+    seed_two_doorway_block(clean_db)
+
+    resp = client.get("/api/types/blocking-driveway/doorways?min_calls=not-a-number")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["filters"]["min_calls"] == 2  # derive()'s own default
+
+
 # ----------------------------------------------------------- routing scoped by type
 
 
@@ -442,6 +580,37 @@ def test_type_page_serves_the_same_page_for_a_tracked_type(client):
 def test_type_page_404s_for_an_untracked_slug(client):
     resp = client.get("/types/not-a-real-type")
     assert resp.status_code == 404
+
+
+def test_untracked_type_page_states_a_reason_rather_than_a_bare_404(client):
+    """Task 5.3: an unknown slug used to get Flask's generic "Not Found" page
+    (`abort(404)`); it now gets a rendered explanation naming the slug and
+    linking every tracked type, still at a 404 status -- the resource really
+    does not exist, only the body now says why instead of leaving a viewer to
+    guess whether it was a typo, a stale link, or a server problem.
+    """
+    resp = client.get("/types/not-a-real-type")
+
+    assert resp.status_code == 404
+    assert "text/html" in resp.content_type
+    body = resp.get_data(as_text=True)
+    assert "not-a-real-type" in body
+    assert "not a tracked type" in body
+    # Every tracked type is offered as a way forward, not just asserted absent.
+    assert 'href="/types/no-parking-sign"' in body
+    assert 'href="/"' in body
+
+
+def test_untracked_type_page_escapes_the_slug(client):
+    """The slug is an untrusted path segment echoed back into HTML -- Jinja
+    auto-escaping (`render_template_string`) must neutralize it rather than
+    have it land in the page unescaped.
+    """
+    resp = client.get("/types/%3Cscript%3Ealert(1)%3C/script%3E")
+
+    assert resp.status_code == 404
+    body = resp.get_data(as_text=True)
+    assert "<script>alert(1)" not in body
 
 
 def test_doorways_and_blocks_endpoints_agree_on_the_type_they_scope_to(client, clean_db):
@@ -628,6 +797,41 @@ def test_a_decision_recorded_by_one_viewer_is_visible_to_a_second_viewer(client,
     }
 
 
+def test_decisions_survive_an_application_restart(client, clean_db):
+    """Task 6.2. Nothing about a decision lives in this process: `record()`
+    and `list_for()` (`src/mirror/triage.py`) open a connection, write or
+    read `triage_decisions`, and hold no module-level cache across calls --
+    `create_app()` builds a fresh Flask app with no state carried over
+    either. So "the application restarts" is exactly `independent_client()`
+    (a wholly new `create_app()`, sharing nothing in-process with `client`)
+    called *after* the write, standing in for the process that made the
+    write having already exited. The only thing that could make a decision
+    survive that is the Postgres row itself -- which this proves is what
+    actually carries it, not some server-side cache that would vanish on a
+    real restart along with the process that built it.
+    """
+    posted = client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "doorway", "item_key": "1-first-st", "decision": "sched",
+              "note": "Sign ordered, install pending.", "role": "HRM coordinator"},
+    )
+    assert posted.status_code == 200
+
+    # Stand in for the process restarting: a brand new app, a brand new
+    # client, sharing no Python object with the one that made the write --
+    # only the same underlying Postgres schema.
+    restarted = independent_client()
+
+    seen = restarted.get("/api/types/blocking-driveway/decisions").get_json()
+
+    assert len(seen["decisions"]) == 1
+    entry = seen["decisions"][0]
+    assert entry["decision"] == "sched"
+    assert entry["note"] == "Sign ordered, install pending."
+    assert entry["role"] == "HRM coordinator"
+    assert entry["updated_at"] is not None
+
+
 def test_posting_the_same_item_twice_updates_in_place_rather_than_duplicating(client, clean_db):
     first = client.post(
         "/api/types/blocking-driveway/decisions",
@@ -688,12 +892,13 @@ def test_a_decision_under_one_violation_type_does_not_appear_under_another(clean
     assert other_type == []
 
 
-def test_decision_role_is_a_placeholder_pending_task_6_6(client, clean_db):
+def test_decision_role_defaults_to_a_placeholder_when_none_is_supplied(client, clean_db):
     """Task 6.1's scope note: the `role` column is NOT NULL, so something
-    sane must be written even though role *selection* is task 6.6's, not
-    this one's. This just pins today's value so a change to the placeholder
-    is a deliberate edit, not an accident -- it is not a claim that
-    "unspecified" is the final word on what role means.
+    sane must be written even for a request that carries no `role` at all --
+    an older client, or a bare API call made by hand. Task 6.6 is what asks
+    the served page's own viewers for a real role before they ever reach
+    this route; this just pins the fallback for everyone else, so a change
+    to the placeholder is a deliberate edit, not an accident.
     """
     resp = client.post(
         "/api/types/blocking-driveway/decisions",
@@ -701,6 +906,55 @@ def test_decision_role_is_a_placeholder_pending_task_6_6(client, clean_db):
     )
 
     assert resp.get_json()["role"] == "unspecified" == mirror_triage.PLACEHOLDER_ROLE
+
+
+def test_decision_role_is_persisted_when_the_request_supplies_one(client, clean_db):
+    """Task 6.6: `web/app/index.html`'s `ensureRole()` asks a viewer to pick a
+    role before it ever calls `saveDecision()`, and that role rides along in
+    the POST body. This is the server-side half of that path: a `role` the
+    request actually supplies is written and read back verbatim, not
+    overridden by `PLACEHOLDER_ROLE` (which `record()` only reaches for when
+    the field is missing or blank -- see the previous test).
+    """
+    resp = client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "doorway", "item_key": "1-first-st", "decision": "visit",
+              "role": "Parking enforcement officer"},
+    )
+
+    assert resp.get_json()["role"] == "Parking enforcement officer"
+
+    seen = client.get("/api/types/blocking-driveway/decisions").get_json()
+    assert seen["decisions"][0]["role"] == "Parking enforcement officer"
+
+
+def test_role_grants_no_differing_access_to_the_shared_list(client, clean_db):
+    """Task 6.7: "the application makes no access-control claim and grants no
+    differing access by role." There is no code path anywhere in this route
+    that reads a `role` to decide what a request may see or do -- proven
+    here by two decisions recorded under two different, even made-up, role
+    strings (nothing restricts `role` to a fixed enum, because it identifies
+    rather than authenticates) both landing in the same list, readable by a
+    request that supplies no role of its own at all.
+    """
+    client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "doorway", "item_key": "1-first-st", "decision": "visit",
+              "role": "HRM coordinator"},
+    )
+    client.post(
+        "/api/types/blocking-driveway/decisions",
+        json={"scope": "block", "item_key": "12090999", "decision": "study",
+              "role": "someone who typed anything at all"},
+    )
+
+    # No auth header, no cookie, no role of its own -- a bare GET still sees
+    # both roles' decisions, in full.
+    seen = client.get("/api/types/blocking-driveway/decisions").get_json()
+    roles_seen = {d["role"] for d in seen["decisions"]}
+
+    assert len(seen["decisions"]) == 2
+    assert roles_seen == {"HRM coordinator", "someone who typed anything at all"}
 
 
 def test_decision_with_an_invalid_scope_is_rejected_not_silently_dropped(client, clean_db):
@@ -736,7 +990,7 @@ def test_decisions_endpoints_404_for_an_untracked_slug(client):
 
 def test_index_page_persists_decisions_through_the_server_not_local_storage_only(client):
     """A page-shape check, not an end-to-end browser test: the served page's
-    script must call the new shared-storage endpoints from its boot and save
+    script must call the shared-storage endpoints from its boot and save
     paths, so a decision recorded in one browser is not silently confined to
     that browser's localStorage (the pre-6.1 defect design.md M6 and
     proposal.md describe). `test_index_served_at_root_with_no_auth_and_no_build_step`
@@ -748,8 +1002,288 @@ def test_index_page_persists_decisions_through_the_server_not_local_storage_only
     assert "/api/types/${SLUG}/decisions" in body
     assert "loadDecisions" in body
     assert "saveDecision" in body
-    # The pre-6.1 fallback is still present (6.3 removes it), just not the
-    # active path any more.
-    assert "loadLocal" in body
-    assert "saveLocal" in body
-    assert 'useCap("db")' in body
+
+
+def test_index_page_has_no_local_storage_fallback_left(client):
+    """Task 6.3: the pre-6.1 `localStorage` fallback and the
+    `window.claude.use("db")` binding it fell back through are gone from the
+    served page entirely -- not merely dead and unreachable, as 6.1 left
+    them, but removed, so no code path in this file can leave a viewer
+    believing a local-only decision was shared. `useCap` itself is not
+    asserted against here: it also backs the unrelated "Ask Claude" advice
+    sampler (`window.claude.use("sample")`), which this task does not touch.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    # The functions and the storage calls themselves are gone -- checked as
+    # code, not as bare substrings, so a comment that still narrates this
+    # history by name (as the surrounding code does) cannot make this test
+    # pass by accident.
+    assert "function loadLocal(" not in body
+    assert "function saveLocal(" not in body
+    assert "localStorage.getItem" not in body
+    assert "localStorage.setItem" not in body
+    assert 'useCap("db")' not in body
+    assert "onSnapshot" not in body  # the removed live-update block's own call
+
+
+def test_index_page_asks_for_a_role_before_recording_a_decision(client):
+    """Task 6.6: a role is asked for -- `ensureRole()`/`askRole()` gate
+    `save()`, the one function every decision-recording control (`data-s`
+    buttons, the note textarea) calls -- before a decision is ever sent to
+    the server. Nothing in the row list, the filters, the search box or the
+    map calls `ensureRole()`, so those stay readable with no role picked.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert "ensureRole" in body
+    assert "askRole" in body
+    assert "const role = await ensureRole();" in body
+
+
+def test_index_page_states_role_identifies_not_authenticates(client):
+    """Task 6.7: design.md M7's own language -- "the application says
+    plainly that roles identify rather than authenticate" -- has to actually
+    appear somewhere a viewer reads it, not just in this repository's design
+    notes. The role prompt is where a viewer chooses a role, so it is where
+    that statement has to live.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert "does not log you in" in body
+
+
+def test_index_page_shows_role_and_last_changed_time_on_a_decision(client):
+    """Task 6.5: a triaged doorway or block names who marked it and when.
+    `detail()` is the one function that renders that for both a doorway and
+    a block (isBlock only changes which evidence/labels it reads, not which
+    function builds the meta line), so one string check here covers both."""
+    body = client.get("/").get_data(as_text=True)
+
+    assert '"Marked by "' in body
+    assert "Last changed" in body
+
+
+def test_index_page_rolls_back_an_optimistic_decision_on_a_failed_save(client):
+    """Task 6.4: `save()` used to update `DEC` (and thus the rendered row)
+    before `saveDecision()`'s `fetch()` had resolved, and never undid that
+    if the POST failed -- a viewer could see a decision as recorded that the
+    server never got. `save()` now keeps `previous` and, when
+    `saveDecision()` returns `false`, restores it and re-renders, so the row
+    stops claiming a decision that was not actually persisted. This is a
+    page-shape check, not a browser test (no JS harness exists in this
+    repository -- see the module docstring's description of what this file
+    covers): it pins the specific rollback and the specific "not recorded"
+    wording, so a future edit that quietly drops either is a visible diff
+    here, not a silent regression.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert "const previous = DEC[it.key] ? {...DEC[it.key]} : null;" in body
+    assert "if (previous) DEC[it.key] = previous; else delete DEC[it.key];" in body
+    assert "has not been recorded" in body
+    # saveDecision() must report success/failure for save() to act on --
+    # bare fire-and-forget would leave nothing to roll back on.
+    assert "return true;" in body
+    assert "return false;" in body
+
+
+# --------------------------------------------------------- type figures (5.7/5.8)
+
+
+def test_figures_route_reports_unavailable_when_nothing_is_stored(client):
+    """Task 5.8: a canonical type with no `type_figures` row for the mirror's
+    current version answers `available: false` with a stated reason -- read
+    straight through from `mirror.type_figures.figures_for` -- never a bare
+    `null` and never a number computed here as a fallback (`server.py` calls
+    `figures_for` only; it never touches `mirror.per_type`/`mirror.figures`).
+    """
+    resp = client.get("/api/types/blocking-driveway/figures")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["type"] == "Blocking Driveway"
+    assert data["slug"] == "blocking-driveway"
+    assert data["available"] is False
+    assert isinstance(data["reason"], str) and data["reason"]
+    assert "figures" not in data
+
+
+def test_figures_route_404s_for_an_untracked_slug(client):
+    resp = client.get("/api/types/not-a-real-type/figures")
+
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "untracked"
+
+
+def test_figures_route_serves_what_type_figures_stored(client, clean_db):
+    """Once `mirror.type_figures.compute_and_store` (task 5.7) has stored a
+    row for a type, this route serves exactly that row -- the tow comparison
+    included -- rather than deriving anything itself. This is what
+    `web/app/index.html`'s tow-thesis sentence reads.
+    """
+    seed_two_doorway_block(clean_db)
+
+    # Default parameters, deliberately not overridden: `figures_for` (what the
+    # route calls) reads back under `type_figures.DEFAULT_PARAMETERS` unless a
+    # caller asks otherwise, and this route asks for nothing else -- a
+    # `bootstrap_iterations` override here would store a row under a
+    # different `parameters` key than the one the route reads, and the route
+    # would then correctly (if confusingly, for a test) report `available:
+    # false`. Only 4 calls are seeded, well under `per_type.MIN_TOW_GROUP_SAMPLE`
+    # (30), so the cluster bootstrap never actually runs regardless of the
+    # iteration count -- there is no speed cost to leaving it at the default.
+    outcomes = mirror_type_figures.compute_and_store(
+        clean_db, types=[app_server.DEFAULT_CANONICAL_TYPE], log=lambda m: None,
+    )
+    assert outcomes and outcomes[0]["ok"]
+
+    resp = client.get("/api/types/blocking-driveway/figures")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["available"] is True
+    assert data["type"] == "Blocking Driveway"
+    assert data["computed_at"]
+    figures = data["figures"]
+    assert set(figures) >= {"tow", "vehicles", "overall_conclusion"}
+    assert figures["overall_conclusion"].startswith("For Blocking Driveway")
+    assert "recurrence_pct" in figures["tow"]["towed"]
+    assert "recurrence_pct" in figures["tow"]["not_towed"]
+
+
+# --------------------------------------------------- freshness (7.1, 7.3, 7.4a)
+
+
+def set_layer_state(conn, layer, **fields):
+    """Write one `layer_state` row directly. `test_sync.py`/`test_status.py`
+    already prove `sync.py` writes these columns correctly from a real sync;
+    this file only needs *some* known row in place so
+    `mirror.status.mirror_freshness` has clocks to report through
+    `GET /api/freshness` -- running an entire fake sync for that would test
+    `sync.py` a second time, not this route.
+    """
+    cols = ["layer", *fields.keys()]
+    placeholders = ", ".join(["%s"] * len(cols))
+    updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in fields) or "layer = EXCLUDED.layer"
+    with conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO layer_state ({', '.join(cols)}) VALUES ({placeholders}) "
+            f"ON CONFLICT (layer) DO UPDATE SET {updates}",
+            (layer, *fields.values()),
+        )
+    conn.commit()
+
+
+def test_freshness_route_reports_the_four_clocks(client, clean_db):
+    """Task 7.1: last successful sync and next-due are both present, and are
+    read off `mirror.status.mirror_freshness` (task 3.3), not recomputed."""
+    success = datetime.datetime(2026, 9, 10, 4, 0, tzinfo=datetime.UTC)
+    due = datetime.datetime(2026, 9, 18, 4, 0, tzinfo=datetime.UTC)
+    for layer in ("service_requests", "custom_fields"):
+        set_layer_state(clean_db, layer, source_last_edit=success, last_attempt_at=success,
+                        last_attempt_ok=True, last_success_at=success, next_due_at=due)
+    seed_driveway_call(clean_db, 9001, "1 FIRST ST, HALIFAX", success - datetime.timedelta(days=2))
+
+    resp = client.get("/api/freshness")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert set(payload) == {
+        "checked_at", "most_recent_call_date", "last_success_at",
+        "last_attempt_at", "next_due_at", "behind_source", "stale_call_warning",
+    }
+    # Parsed back to the same instant regardless of the offset the string
+    # carries -- this is the check that would have caught the discarded
+    # attempt's bug (comparing raw .isoformat() strings across a session
+    # timezone that is not UTC).
+    assert datetime.datetime.fromisoformat(payload["last_success_at"]) == success
+    assert datetime.datetime.fromisoformat(payload["next_due_at"]) == due
+    assert payload["behind_source"] is False
+
+
+def test_freshness_timestamps_are_normalized_to_a_utc_offset(client, clean_db):
+    """The specific defect the discarded attempt hit: this codebase's Postgres
+    session timezone is `America/Halifax`, not UTC, so a naive `.isoformat()`
+    on what psycopg hands back prints `-03:00`/`-04:00` even for an instant
+    that is identical to a UTC-constructed timestamp. `_iso_utc` must
+    normalize before serializing, or two payloads describing the same instant
+    would not even be the same *string* -- this pins the string shape itself,
+    not just the parsed instant `test_freshness_route_reports_the_four_clocks`
+    checks.
+    """
+    success = datetime.datetime(2026, 9, 10, 4, 0, tzinfo=datetime.UTC)
+    for layer in ("service_requests", "custom_fields"):
+        set_layer_state(clean_db, layer, source_last_edit=success, last_attempt_at=success,
+                        last_attempt_ok=True, last_success_at=success)
+
+    payload = client.get("/api/freshness").get_json()
+
+    assert payload["last_success_at"].endswith("+00:00")
+
+
+def test_freshness_route_with_no_sync_history_does_not_crash(client, clean_db):
+    """A store nobody has synced yet (design.md M2a's "not yet answerable"
+    pattern) is a state of knowledge, not a 500."""
+    resp = client.get("/api/freshness")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["last_success_at"] is None
+    assert payload["next_due_at"] is None
+    assert payload["most_recent_call_date"] is None
+    assert payload["stale_call_warning"] == {
+        "known": False, "stale": False, "days_old": None,
+        "threshold_days": app_server.STALE_CALL_WARNING_DAYS,
+        "reason": "the mirror holds no calls yet",
+    }
+
+
+def test_freshness_warns_when_the_newest_call_is_materially_stale(client, clean_db):
+    """Task 7.4a: a deliberately stale input -- the newest call the mirror
+    holds is 40 days old, past the 21-day threshold -- fires the warning."""
+    now = datetime.datetime.now(datetime.UTC)
+    seed_driveway_call(clean_db, 9002, "1 FIRST ST, HALIFAX", now - datetime.timedelta(days=40))
+
+    payload = client.get("/api/freshness").get_json()
+
+    warning = payload["stale_call_warning"]
+    assert warning["known"] is True
+    assert warning["stale"] is True
+    assert warning["days_old"] == pytest.approx(40, abs=1)
+    assert warning["threshold_days"] == 21
+    assert "21-day" in warning["reason"]
+
+
+def test_freshness_does_not_warn_when_the_newest_call_is_recent(client, clean_db):
+    now = datetime.datetime.now(datetime.UTC)
+    seed_driveway_call(clean_db, 9003, "1 FIRST ST, HALIFAX", now - datetime.timedelta(days=1))
+
+    payload = client.get("/api/freshness").get_json()
+
+    warning = payload["stale_call_warning"]
+    assert warning["known"] is True
+    assert warning["stale"] is False
+    assert warning["reason"] is None
+
+
+def test_freshness_route_is_reachable_with_no_type_scoping(client):
+    """Unlike every other API route here, freshness names no `<slug>` -- the
+    mirror has one set of clocks, not one per violation type."""
+    resp = client.get("/api/freshness")
+    assert resp.status_code == 200
+
+
+def test_served_page_fetches_freshness_and_no_longer_asserts_liveness(client):
+    """Task 7.3: the undated "Regenerated from the live service, not from a
+    stored export" claim is gone from the served page (it was also false --
+    the app is served from a mirror, design.md M1 -- not a live per-request
+    query), and the page fetches dated freshness instead. Task 7.1: the
+    fetch's result is wired to a visible element, not merely present in the
+    script unreached by any markup.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert "Regenerated from the live service" not in body
+    assert "/api/freshness" in body
+    assert 'id="freshness"' in body

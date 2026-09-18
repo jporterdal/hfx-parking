@@ -123,6 +123,14 @@ textarea{font:inherit;font-size:14px;width:100%;max-width:68ch;min-height:62px;p
 .meta{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--muted);margin-top:8px}
 .advice{max-width:68ch;margin-top:12px;padding:11px 13px;border-left:3px solid var(--hazard);
   background:var(--surface);font-size:14px;color:var(--ink-2);white-space:pre-wrap}
+/* Task 6.6: the one-time role prompt shown before a decision is first recorded. */
+.role-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;
+  align-items:center;justify-content:center;z-index:50;padding:16px}
+.role-card{background:var(--surface-2);border:1px solid var(--line);border-radius:6px;
+  padding:20px 22px;max-width:340px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.role-card h2{margin:0 0 8px;font-size:16px}
+.role-card p{margin:0 0 14px;font-size:13px;color:var(--muted)}
+.role-choices{display:flex;flex-direction:column;gap:8px}
 footer{margin-top:34px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--muted);
   max-width:74ch}
 footer a{color:var(--accent)}
@@ -130,6 +138,12 @@ footer h3{font-family:"Barlow Condensed",sans-serif;font-size:14px;letter-spacin
   color:var(--ink-2);margin:16px 0 6px}
 .banner{margin-top:14px;padding:9px 13px;border:1px dashed var(--line-2);border-radius:3px;font-size:13px;
   color:var(--muted);background:var(--surface)}
+/* Tasks 7.1/7.3/7.4a: the freshness line -- solid, not dashed, and placed in
+   the header rather than tucked away, so the last successful update and the
+   next expected one are visible without being sought (task 7.1). */
+.freshness{margin:0 0 18px;padding:8px 13px;border:1px solid var(--line-2);border-radius:3px;
+  font-size:13px;color:var(--ink-2);background:var(--surface-2);max-width:74ch}
+.freshness.stale{border-color:var(--alert);background:var(--alert-soft);color:var(--ink)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
 /* ---- map ---- */
@@ -192,6 +206,19 @@ canvas#cv{display:block;width:100%;height:100%}
   .toolbar-top input{flex:1;min-width:180px;max-width:300px}
   .district-filter{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
   .filter-label{font-family:"Barlow Condensed",sans-serif;font-size:15px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+  /* Task 5.5a: the derivation-filter row (min. recent calls, min. calling
+     doorways/block, recency window, recurrence window). Reuses
+     .district-filter's label layout and .filter-label's type so this row
+     reads as part of the same toolbar language as the type/district
+     selects above it, not a bolted-on control. */
+  .toolbar-filters{display:flex;align-items:center;flex-wrap:wrap;gap:16px 12px}
+  .toolbar-filters input[type=number]{width:5em;height:34px;padding:0 8px}
+  .toolbar-filters #apply-filters{height:34px;padding:0 14px;border:1px solid var(--line-2);
+    border-radius:4px;text-decoration:none}
+  @media(max-width:768px){
+    .toolbar-filters{width:100%}
+    .toolbar-filters input[type=number]{flex:1;width:auto;min-width:0}
+  }
   .controls{padding:0;gap:12px}
   .seg{flex-wrap:wrap}
   .workspace{display:grid;grid-template-columns:minmax(240px,var(--map-width,55fr)) 20px minmax(280px,45fr);gap:0;align-items:start}
@@ -272,12 +299,18 @@ canvas#cv{display:block;width:100%;height:100%}
 <div class="wrap">
 <header>
   <p class="eyebrow">Halifax Regional Municipality &middot; blocked driveway service requests &middot; open data to <span id="latest-date">&hellip;</span></p>
+  <!-- Tasks 7.1/7.3/7.4a: the mirror's own freshness, dated rather than
+       asserted -- see the boot() fetch of /api/freshness below, which fills
+       this in and adds .stale if the newest call the mirror holds is
+       materially older than the run time. Not hidden by default, and placed
+       ahead of the headline stats, so it is visible without being sought. -->
+  <p class="freshness" id="freshness" role="status">Checking update status&hellip;</p>
   <div class="intro">
   <div>
   <h1>Blocks, not doorways</h1>
   <details class="research">
   <summary>Why blocks? Read the analysis</summary>
-  <p class="thesis"><span id="tow-thesis">A tow does not lower the chance a doorway calls again: <b>44.7 per cent against 44.6 per cent</b>.</span>
+  <p class="thesis"><span id="tow-thesis">Tow-effect comparison for this type: &hellip;</span>
   Across these addresses <b><span id="distinct-count">&hellip;</span> of <span id="seen-count">&hellip;</span> recorded vehicles were different cars</b>. There is no repeat offender to
   deter, so the street is producing the violation. And <b><span id="with-neighbour-count">&hellip;</span> of the <span id="n-doorways-thesis">&hellip;</span> doorways sit on a block where a neighbour is
   also still calling</b>, which means most of these are not a sign at one address. They are one block-wide problem
@@ -312,6 +345,37 @@ canvas#cv{display:block;width:100%;height:100%}
     <label class="district-filter" for="district"><span class="filter-label">District</span>
       <select id="district"></select>
     </label>
+  </div>
+  <!-- Task 5.5a: district, minimum recent calls, minimum still-calling
+       doorways, the recency window and the recurrence window (design.md
+       M11) as interactive controls. Unlike the type switch and the district
+       select above, these five change what `mirror.derive_recency.
+       derive_with_recency` computes on the server (task 5.5b exposes the
+       recency window there) -- not just what the already-fetched rows look
+       like once filtered client-side -- so ranking (which `min_calls` and
+       `recency_days` both feed into via `calls_12mo`) updates correctly
+       too, which a client-side-only filter could not do. "Apply filters"
+       reloads the page at the same type with these values (plus the
+       District select's current value) on the query string; see this
+       file's boot()-opening script block (FILTER_QUERY, right beside SLUG)
+       for the fetch side, and src/app/server.py's `_filters_from_request`
+       for the route side. Values persist across a reload because they are
+       read back out of the query string on boot -- see the filter-controls
+       IIFE just after the type-switch one below. -->
+  <div class="toolbar-filters" aria-label="Derivation filters">
+    <label class="district-filter" for="min-calls"><span class="filter-label">Min. recent calls</span>
+      <input type="number" id="min-calls" min="0" step="1" inputmode="numeric">
+    </label>
+    <label class="district-filter" for="min-doorways"><span class="filter-label">Min. calling doorways/block</span>
+      <input type="number" id="min-doorways" min="0" step="1" inputmode="numeric">
+    </label>
+    <label class="district-filter" for="recency-days"><span class="filter-label">Recency window (days)</span>
+      <input type="number" id="recency-days" min="1" step="1" inputmode="numeric">
+    </label>
+    <label class="district-filter" for="recur-days"><span class="filter-label">Recurrence window (days)</span>
+      <input type="number" id="recur-days" min="1" step="1" inputmode="numeric">
+    </label>
+    <button type="button" class="clear-filters" id="apply-filters">Apply filters</button>
   </div>
   <div class="controls">
     <div class="status-tabs" id="statusfilter" aria-label="Filter by status"></div>
@@ -383,8 +447,13 @@ canvas#cv{display:block;width:100%;height:100%}
   list, not from an official name, and its dwelling count covers the whole block rather than the street the calls sit
   on.</p>
   <h3>Source</h3>
-  <p>HRM Open Data, <a href="https://data-hrm.hub.arcgis.com" target="_blank" rel="noopener">data-hrm.hub.arcgis.com</a>.
-  Regenerated from the live service, not from a stored export.</p>
+  <p>HRM Open Data, <a href="https://data-hrm.hub.arcgis.com" target="_blank" rel="noopener">data-hrm.hub.arcgis.com</a>,
+  mirrored into this application's own store rather than queried live per request (design.md M1).
+  <!-- Task 7.3: dated freshness in place of the removed undated "regenerated
+       from the live service" claim, which was also false once M1 landed --
+       this is served from a mirror, not a live per-request query. Filled by
+       the same /api/freshness fetch that fills the header banner above. -->
+  <span id="footer-sync-date">Checking sync status&hellip;</span></p>
 </footer>
 </div>
 <script>
@@ -406,6 +475,31 @@ canvas#cv{display:block;width:100%;height:100%}
 const DEFAULT_SLUG = "blocking-driveway";
 const SLUG = (location.pathname.match(/^\/types\/([a-z0-9-]+)\/?$/) || [null, DEFAULT_SLUG])[1];
 
+/* Task 5.5a/5.5b: the five derivation filters (design.md M11) travel on the
+ * query string, the same way SLUG travels on the path -- a shared link
+ * carries both which type and which filter values produced the list it
+ * shows. `FILTER_PARAM_NAMES` matches src/app/server.py's
+ * `_filters_from_request` exactly (`district`, `min_calls`, `min_doorways`,
+ * `recur_days`, `recency_days`); this page never validates or defaults a
+ * value itself -- an absent, blank or malformed one is simply not sent, and
+ * the server falls back to its own defaults (`_int_param`), so there is
+ * exactly one place a filter default lives. `FILTER_QUERY` is appended to
+ * every per-type API fetch below so a reload driven by the toolbar's "Apply
+ * filters" button (see the filter-controls IIFE just after the type
+ * switch's) actually changes what the server returns, not only what this
+ * page displays. */
+const FILTER_PARAM_NAMES = ["district", "min_calls", "min_doorways", "recur_days", "recency_days"];
+const FILTER_QUERY = (() => {
+  const src = new URLSearchParams(location.search);
+  const out = new URLSearchParams();
+  for (const name of FILTER_PARAM_NAMES){
+    const v = src.get(name);
+    if (v !== null && v.trim() !== "") out.set(name, v);
+  }
+  const s = out.toString();
+  return s ? `?${s}` : "";
+})();
+
 async function boot(){
 const banner = document.getElementById("dbstate");
 const showBanner = msg => { banner.textContent = msg; banner.hidden = !msg; };
@@ -414,8 +508,8 @@ let mapRes, doorRes, blockRes, typesRes;
 try{
   [mapRes, doorRes, blockRes, typesRes] = await Promise.all([
     fetch("/map-network.json"),
-    fetch(`/api/types/${SLUG}/doorways`),
-    fetch(`/api/types/${SLUG}/blocks`),
+    fetch(`/api/types/${SLUG}/doorways${FILTER_QUERY}`),
+    fetch(`/api/types/${SLUG}/blocks${FILTER_QUERY}`),
     fetch("/api/types"),
   ]);
 }catch(e){
@@ -455,23 +549,136 @@ const ROWS = DATA.rows, BLOCKS = DATA.blocks;
   });
 })();
 
-/* Task 5.2 hazard note (not this task's to fix -- task 5.8's): the tow
- * comparison sentence below ("A tow does not lower...44.7 per cent against
- * 44.6 per cent") is Blocking Driveway's own figure, frozen into this
- * markup rather than computed per type (see web/app/index.html's `<p
- * class="thesis">`). Every *other* number on this page now comes from
- * SLUG's own /api/types/<slug>/... response and is correct for whichever
- * type is being viewed; this one sentence is not, and routing to another
- * type would otherwise silently show Driveway's number under that type's
- * view with nothing marking it as wrong. This is a minimal guard, not 5.8's
- * fix (serving each type's own stored figure): it blanks the claim outside
- * Driveway rather than compute or store anything. */
-if (SLUG !== DEFAULT_SLUG){
-  const towThesis = document.getElementById("tow-thesis");
-  if (towThesis){
-    towThesis.textContent = "Tow-effect comparison for this type is not yet available.";
+/* Task 5.5a: the toolbar's five derivation-filter controls (district, min.
+ * recent calls, min. calling doorways/block, recency window, recurrence
+ * window -- design.md M11). Self-contained the same way the type-switch,
+ * freshness and tow-thesis IIFEs beside it are: it only ever touches its
+ * own controls (#min-calls, #min-doorways, #recency-days, #recur-days,
+ * #apply-filters) and the pre-existing #district select's *current value*
+ * (read, never written -- #district's own population and onchange handler
+ * are unrelated code this task does not touch), so a slow or missing filter
+ * bar cannot affect the doorway/block rendering owned elsewhere in this
+ * file.
+ *
+ * Applying a change is a full reload rather than an in-place refetch: every
+ * one of these five parameters can change which doorways are listed at all
+ * (not just how the already-rendered rows are sorted or hidden), and this
+ * page's row/block state (DATA/ROWS/BLOCKS above, and everything render()
+ * derives from them) is built once, at boot, as `const`s -- reloading at a
+ * new URL re-runs boot() from scratch against the server's own filtered
+ * result (FILTER_QUERY above) rather than asking the rest of this file's
+ * render pipeline to cope with a mid-life data swap it was never written to
+ * do. The four number inputs are pre-filled from the current query string
+ * (or left blank, meaning "use the server's default") so a reload of a
+ * filtered link shows the values that produced it, not the bare defaults --
+ * task 5.5d ("state the filter values in effect") is not this task, but not
+ * contradicting it seemed worth the four extra lines. */
+(() => {
+  const ids = ["min-calls", "min-doorways", "recency-days", "recur-days"];
+  const params = ["min_calls", "min_doorways", "recency_days", "recur_days"];
+  const current = new URLSearchParams(location.search);
+  ids.forEach((id, i) => {
+    const el = document.getElementById(id);
+    const v = current.get(params[i]);
+    if (el && v !== null && v.trim() !== "") el.value = v;
+  });
+  const applyBtn = document.getElementById("apply-filters");
+  if (!applyBtn) return;
+  applyBtn.addEventListener("click", () => {
+    const next = new URLSearchParams();
+    const districtEl = document.getElementById("district");
+    if (districtEl && districtEl.value) next.set("district", districtEl.value);
+    ids.forEach((id, i) => {
+      const el = document.getElementById(id);
+      if (el && el.value.trim() !== "") next.set(params[i], el.value.trim());
+    });
+    const q = next.toString();
+    location.href = location.pathname + (q ? `?${q}` : "");
+  });
+})();
+
+/* Tasks 7.1/7.3/7.4a: freshness is served, not asserted (design.md M4).
+ * Independent of the map/doorway/block fetches above for the same reason the
+ * type-switcher fetch is -- a slow or failed /api/freshness must not block
+ * the list a viewer actually asked for. Fills the header banner (#freshness,
+ * unhidden by default -- task 7.1's "visible without being sought") and the
+ * footer's dated Source line (#footer-sync-date, task 7.3's replacement for
+ * the removed undated "regenerated from the live service" claim). The mirror
+ * has one set of these clocks, not one per violation type, so this does not
+ * vary with SLUG. */
+(async () => {
+  const header = document.getElementById("freshness");
+  const footerLine = document.getElementById("footer-sync-date");
+  const fmt = iso => iso ? new Date(iso).toLocaleString(undefined,
+    {dateStyle: "medium", timeStyle: "short"}) : null;
+  try{
+    const resp = await fetch("/api/freshness");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const f = await resp.json();
+    const lastSync = fmt(f.last_success_at);
+    const nextDue = fmt(f.next_due_at);
+    const parts = [
+      lastSync ? `Last updated ${lastSync}.` : "This mirror has not completed a sync yet.",
+      nextDue ? `Next update expected ${nextDue}.` : "Next update time not yet known.",
+    ];
+    const warning = f.stale_call_warning;
+    if (warning && warning.stale){
+      parts.push(`The most recent call in the data is ${Math.round(warning.days_old)} `
+        + "days old -- HRM may not have published recently.");
+      if (header) header.classList.add("stale");
+    }
+    if (header){ header.textContent = parts.join(" "); header.hidden = false; }
+    if (footerLine){
+      footerLine.textContent = lastSync
+        ? `Last synced from HRM Open Data ${lastSync}.`
+        : "This mirror has not completed a sync yet.";
+    }
+  }catch(e){
+    console.error("could not load freshness", e);
+    if (header){ header.textContent = "Could not check update status. Reload to try again."; header.hidden = false; }
+    if (footerLine){ footerLine.textContent = "Last sync time unavailable."; }
   }
-}
+})();
+
+/* Task 5.8: the tow-comparison sentence ("A tow does not lower the chance a
+ * doorway calls again: X per cent against Y per cent") reads SLUG's own
+ * stored figures from /api/types/<slug>/figures (mirror.type_figures,
+ * computed once per mirror reload -- task 5.7 -- and never recomputed here),
+ * replacing 5.2's stopgap that blanked the sentence for every non-default
+ * type rather than have it silently show Driveway's frozen number under
+ * another type's view. Independent of the map/doorway/block fetches above,
+ * for the same reason the freshness and type-switcher fetches are: a slow or
+ * failed figures request must not block the list a viewer actually asked
+ * for -- it only ever affects this one sentence. `available: false` (no row
+ * stored yet for the mirror's current version) is reported as "not yet
+ * available" with the server's own stated reason, never computed here as a
+ * fallback. */
+(async () => {
+  const towThesis = document.getElementById("tow-thesis");
+  if (!towThesis) return;
+  const notYetAvailable = reason =>
+    "Tow-effect comparison for this type is not yet available"
+    + (reason ? ` (${reason}).` : ".");
+  try{
+    const resp = await fetch(`/api/types/${SLUG}/figures`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const payload = await resp.json();
+    if (!payload.available){
+      towThesis.textContent = notYetAvailable(payload.reason);
+      return;
+    }
+    const tow = (payload.figures || {}).tow || {};
+    const towedPct = tow.towed ? tow.towed.recurrence_pct : null;
+    const notTowedPct = tow.not_towed ? tow.not_towed.recurrence_pct : null;
+    towThesis.textContent = (towedPct == null || notTowedPct == null)
+      ? notYetAvailable("no recurrence rate stored for one or both tow groups")
+      : `A tow does not lower the chance a doorway calls again: `
+        + `${towedPct.toFixed(1)} per cent against ${notTowedPct.toFixed(1)} per cent.`;
+  }catch(e){
+    console.error("could not load type figures", e);
+    towThesis.textContent = notYetAvailable(null);
+  }
+})();
 
 /* Header figures the template used to have write_board() bake into the page
  * text at generation time (__LATEST__, __N_DOORWAYS__, ...). Same numbers, now
@@ -505,17 +712,13 @@ const BLOCK_ST = {
   sched:{label:"Block measure scheduled", pill:"sched"},
   noact:{label:"No action needed", pill:"none"}
 };
-let DEC = {}, db = null, sampler = null;
-// Task 6.1 supersedes db/loadLocal/saveLocal with server-backed shared
-// triage (see loadDecisions()/saveDecision(), below) -- they are kept,
-// unused by that path, because removing them is task 6.3's job.
-const LS_KEY = "halifax-triage-decisions";
-function loadLocal(){
-  try { return JSON.parse(localStorage.getItem(LS_KEY) || "{}"); } catch(e){ return {}; }
-}
-function saveLocal(){
-  try { localStorage.setItem(LS_KEY, JSON.stringify(DEC)); } catch(e){ /* private window */ }
-}
+let DEC = {}, sampler = null, ROLE = null;
+// Task 6.3: the pre-6.1 localStorage fallback (loadLocal/saveLocal) and the
+// window.claude.use("db") capability binding that used to sit here and
+// below the boot section are gone. Shared triage now has exactly one
+// storage path -- loadDecisions() and saveDecision() (below), against this
+// server -- so no code path can leave a viewer holding a private,
+// browser-only copy of a decision while believing it was shared.
 let mode = "block", openKey = null, selected = null;
 let f = {district:null, status:"all", sort:"n", q:""};
 
@@ -982,8 +1185,12 @@ function detail(it, s, V){
   const ta = d.querySelector("textarea");
   ta.value = (DEC[it.key] && DEC[it.key].note) || "";
   const rec = DEC[it.key];
+  // Task 6.5: a triaged doorway or block names who marked it and when, not
+  // just what was decided -- this runs for both (detail() is shared by
+  // isBlock and doorway rows alike). Role reads as attribution ("Marked
+  // by ..."), never as a permission or a login, per task 6.7/design.md M7.
   d.querySelector(".meta").textContent = rec && rec.updatedAt
-    ? `Last changed ${new Date(rec.updatedAt).toLocaleString()}`
+    ? `${rec.role ? "Marked by " + rec.role + " · " : ""}Last changed ${new Date(rec.updatedAt).toLocaleString()}`
     : "No decision recorded yet";
 
   d.querySelectorAll("[data-s]").forEach(btn => btn.onclick = e => {
@@ -1004,58 +1211,117 @@ function detail(it, s, V){
   return d;
 }
 
-/* ---------- persistence ---------- */
-async function save(it, status, note, quiet){
-  const rec = {status, note:note||"", district:it.d, updatedAt:new Date().toISOString(),
-               label: mode === "block" ? it.s : it.a, kind: mode};
-  DEC[it.key] = rec;
-  if (quiet) { draw(); chips(); } else render();
-  await saveDecision(it, status, note);
+/* ---------- role (tasks 6.6/6.7) ---------- */
+// design.md M7: "The application says plainly that roles identify rather
+// than authenticate." A role is asked for, once, the first time a viewer
+// tries to record a decision -- not at page load -- so the lists (browsing,
+// filtering, search, the map, export) stay fully readable with no role
+// picked at all; only recording a decision (a status button or a note)
+// goes through ensureRole() below. Nothing anywhere in this file or in
+// src/app/server.py branches on ROLE's value: it is a label attached to the
+// row a decision writes, never a gate on what a viewer can see or do.
+const ROLE_OPTIONS = ["HRM coordinator", "Parking enforcement officer", "Other"];
+function askRole(){
+  return new Promise(resolve => {
+    const overlay = document.createElement("div");
+    overlay.className = "role-overlay";
+    overlay.innerHTML =
+      `<div class="role-card" role="dialog" aria-modal="true" aria-labelledby="role-title">` +
+        `<h2 id="role-title">Who's recording this?</h2>` +
+        `<p>This labels the decision so other viewers can see who made it. It identifies you ` +
+        `to them -- it does not log you in, and it changes nothing about what you can see or ` +
+        `do on this page.</p>` +
+        `<div class="role-choices"></div>` +
+      `</div>`;
+    const choices = overlay.querySelector(".role-choices");
+    ROLE_OPTIONS.forEach(opt => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "btn"; b.textContent = opt;
+      b.onclick = () => { overlay.remove(); resolve(opt); };
+      choices.appendChild(b);
+    });
+    document.body.appendChild(overlay);
+  });
+}
+async function ensureRole(){
+  if (!ROLE) ROLE = await askRole();
+  return ROLE;
 }
 
-/* Task 6.1's write side: shared triage decisions now persist through this
- * server, not through window.claude.use("db") or localStorage -- see the
- * comment above loadDecisions() below for why those two are kept but no
- * longer called from here. Backed by /api/types/<slug>/decisions (POST) in
- * src/app/server.py, which upserts into the triage_decisions table
- * (schema.sql, task 1.5) keyed on (violation_type, scope, item_key).
+/* ---------- persistence ---------- */
+/* Task 6.6: a role is asked for (once; cached in ROLE thereafter) before
+ * anything below touches DEC or re-renders a row, so a decision is never
+ * recorded -- here or on the server -- without one.
+ *
+ * Task 6.4: `previous` is kept so a failed write can be undone. The
+ * optimistic assignment below is provisional -- saveDecision() (below)
+ * either replaces it with the server's own confirmed row on success, or
+ * save() rolls it back to `previous` on failure and re-renders, so a
+ * viewer is never left looking at a decision as recorded when the write
+ * that would have recorded it did not succeed.
+ */
+async function save(it, status, note, quiet){
+  const role = await ensureRole();
+  const previous = DEC[it.key] ? {...DEC[it.key]} : null;
+  DEC[it.key] = {status, note:note||"", district:it.d, updatedAt:new Date().toISOString(),
+                 label: mode === "block" ? it.s : it.a, kind: mode, role};
+  if (quiet) { draw(); chips(); } else render();
+  const ok = await saveDecision(it, status, note, role);
+  if (!ok){
+    if (previous) DEC[it.key] = previous; else delete DEC[it.key];
+    if (quiet) { draw(); chips(); } else render();
+  }
+}
+
+/* Task 6.1's write side: shared triage decisions persist through this
+ * server, not through window.claude.use("db") or localStorage (task 6.3
+ * removed both, along with the code paths that used them). Backed by
+ * /api/types/<slug>/decisions (POST) in src/app/server.py, which upserts
+ * into the triage_decisions table (schema.sql, task 1.5) keyed on
+ * (violation_type, scope, item_key).
  *
  * scope/item_key are recovered from it.key rather than threaded through as
  * separate arguments, because it.key is already exactly "d:"+slug(address)
- * or "b:"+block id (see where ROWS/BLOCKS get .key assigned, above) -- the
- * same two-character-prefix convention the old db.doc("decisions/"+...)
- * call relied on. That keeps a doorway decision and a block decision from
- * colliding even where their key text matches, and (SLUG -- the type this
- * particular view is showing, task 5.2 -- being part of the URL) keeps one
- * violation type's decisions off another's list. This must read SLUG, not
- * DEFAULT_SLUG: writing every type's decisions against the default slug is
- * exactly the kind of mixing this task's verify clause exists to catch --
- * see tests/test_app.py's "routing scoped by type" section.
+ * or "b:"+block id (see where ROWS/BLOCKS get .key assigned, above). That
+ * keeps a doorway decision and a block decision from colliding even where
+ * their key text matches, and (SLUG -- the type this particular view is
+ * showing, task 5.2 -- being part of the URL) keeps one violation type's
+ * decisions off another's list. This must read SLUG, not DEFAULT_SLUG:
+ * writing every type's decisions against the default slug is exactly the
+ * kind of mixing this task's verify clause exists to catch -- see
+ * tests/test_app.py's "routing scoped by type" section.
  *
- * A failed write is not swallowed: it lands in the console and in the same
- * status banner loadDecisions() uses below, so task 6.4 ("state plainly when
- * a decision could not be persisted") has a concrete failure to make visible
- * on the row itself, rather than nothing to build on. 6.4 itself -- marking
- * the specific row as unsaved -- is not built here.
+ * Returns true only once the server has confirmed the write and replaces
+ * DEC[it.key] with exactly the row it returned (status, note, role and
+ * updated_at all server-confirmed, not client-guessed); returns false on
+ * any failure without touching DEC, so save() (above) knows to roll the
+ * optimistic row back rather than leave it standing (task 6.4). A failed
+ * write is never swallowed: it lands in the console and in the status
+ * banner, in words that say plainly the decision was not recorded.
  */
-async function saveDecision(it, status, note){
+async function saveDecision(it, status, note, role){
   const scope = it.key.startsWith("b:") ? "block" : "doorway";
   const item_key = it.key.slice(2);
   try{
     const resp = await fetch(`/api/types/${SLUG}/decisions`, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({scope, item_key, decision: status, note: note || ""}),
+      body: JSON.stringify({scope, item_key, decision: status, note: note || "", role}),
     });
     if (!resp.ok){
       const body = await resp.json().catch(() => ({}));
       throw new Error(body.error || `HTTP ${resp.status}`);
     }
     const saved = await resp.json();
-    if (DEC[it.key]) DEC[it.key].updatedAt = saved.updated_at || DEC[it.key].updatedAt;
+    DEC[it.key] = {
+      status: saved.decision, note: saved.note || "", updatedAt: saved.updated_at,
+      role: saved.role, district: it.d, label: mode === "block" ? it.s : it.a, kind: mode,
+    };
+    return true;
   }catch(e){
     console.error("could not persist decision", it.key, e);
-    note2("Could not save that decision just now. It may not be visible to anyone else.");
+    note2("Could not save that decision just now. It has not been recorded, and no one else can see it.");
+    return false;
   }
 }
 const note2 = msg => { el("dbstate").textContent = msg; el("dbstate").hidden = !msg; };
@@ -1182,7 +1448,7 @@ async function loadDecisions(){
     const next = {};
     (payload.decisions || []).forEach(d => {
       const key = (d.scope === "block" ? "b:" : "d:") + d.item_key;
-      next[key] = {status: d.decision, note: d.note || "", updatedAt: d.updated_at};
+      next[key] = {status: d.decision, note: d.note || "", updatedAt: d.updated_at, role: d.role};
     });
     DEC = next;
     const nb = BLOCKS.filter(b => st(b.key) !== "none_").length;
@@ -1192,54 +1458,28 @@ async function loadDecisions(){
       : `${nb} of ${BLOCKS.length} blocks and ${nd} of ${ROWS.length} doorways triaged. Everyone on this page sees the same decisions.`);
     render();
   }catch(e){
-    // Deliberately not "Saved in this browser only" and deliberately not a
-    // fall-through to loadLocal(): a failed *read* of the shared store says
-    // nothing about the store itself being unavailable for writes, so
-    // resurrecting the old per-browser copy here would just be a second,
-    // quieter way back into the defect this task exists to end (see the
-    // comment on the window.claude.use("db") block below). 6.4 owns stating
-    // a failed *write* on the row itself; this is the read path's failure.
+    // Deliberately not "Saved in this browser only": a failed *read* of the
+    // shared store says nothing about the store itself being unavailable
+    // for writes, so falling back to a per-browser copy here would just be
+    // a quieter way back into the defect task 6.1 closed (design.md M6,
+    // proposal.md). 6.4 owns stating a failed *write* on the row itself;
+    // this is the read path's failure.
     console.error("could not load shared decisions", e);
     note2("Could not load shared triage decisions. Reload to try again.");
   }
 }
 loadDecisions();
 
-/* Pre-6.1 shared-storage mechanism (design.md D13/M6): window.claude.use("db")
- * is a capability only a Claude Artifact host grants; everywhere else,
- * including this server, useCap("db") resolves to null (see useCap's
- * definition above). loadDecisions() above is what now actually keeps every
- * viewer of this page in step -- proposal.md's "shared triage has exactly
- * one implementation ... which resolves to null off a Claude Artifact ...
- * silently degrading every viewer to a private localStorage copy" is the
- * defect that mechanism was. This block, loadLocal()/saveLocal() and the
- * useCap binding itself are kept -- not called from loadDecisions() or
- * saveDecision() -- only because removing them is task 6.3's job, not this
- * one's (see that task's text: "remove ... from the served page ... (the
- * localStorage read and write ..., the useCap binding ...)"). It no longer
- * falls back to loadLocal() when db is null, because null is what db is on
- * every host this page actually runs on today, and running that fallback
- * unconditionally would overwrite loadDecisions()'s server-backed DEC with
- * an empty per-browser copy on every single load -- silently reintroducing
- * the exact defect this task closes, rather than merely leaving dead code
- * behind for 6.3 to delete.
- */
-(async () => {
-  db = await useCap("db");
-  if (!db) return;
-  db.collection("decisions").onSnapshot(
-    snap => {
-      const next = {};
-      snap.docs.forEach(doc => {
-        const id = doc.id;
-        next[id.startsWith("b-") ? "b:" + id.slice(2) : "d:" + id.slice(2)] = doc.data();
-      });
-      DEC = next;
-      render();
-    },
-    e => note2("Live updates stopped (" + e.code + "). Your own changes still save.")
-  );
-})();
+// Task 6.3: the pre-6.1 window.claude.use("db") live-update block that used
+// to sit here -- a capability only a Claude Artifact host grants, which
+// resolves to null on every host this page actually runs on -- is removed,
+// along with loadLocal()/saveLocal() near DEC's declaration above and the
+// LS_KEY they read. loadDecisions() and saveDecision() are now the only
+// storage path shared triage has; no code path here can leave a viewer
+// holding a private, local-only copy of a decision while believing it
+// reached anyone else. useCap() itself (below) is unrelated to triage --
+// it also backs the "Ask Claude" advice sampler a few lines down, which
+// this task does not touch.
 
 (async () => {
   const s = await useCap("sample");

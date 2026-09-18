@@ -53,6 +53,18 @@ Route table:
                                          -- task 6.1, see below
   POST /api/types/<slug>/decisions      record one decision, upserted by
                                          (type, scope, item_key) -- task 6.1
+  GET  /api/types/<slug>/figures        a type's filter-independent figures --
+                                         the tow comparison, vehicle uniqueness
+                                         and the conclusion built from both --
+                                         `{type, slug, available, figures?,
+                                         reason?, computed_at?}` -- task 5.8,
+                                         see below
+  GET  /api/freshness                   the four clocks design.md M4 names --
+                                         `{checked_at, most_recent_call_date,
+                                         last_success_at, last_attempt_at,
+                                         next_due_at, behind_source,
+                                         stale_call_warning}` -- tasks
+                                         7.1/7.4a, see below
 
 Every list is computed per request from the mirror via `mirror.derive.derive`
 (design.md M11) -- nothing here materializes a doorway or block list ahead of a
@@ -92,12 +104,70 @@ which is what keeps switching types from mixing them (`tests/test_app.py`'s
 "routing scoped by type" section proves this against seeded data for more
 than the default type, not just the default).
 
+**Task 5.3: an untracked type is reported, not bare-404ed.** `/types/<slug>`
+used to `abort(404)` for a slug `_canonical_for_slug` cannot resolve, which
+Flask renders as its generic "Not Found" HTML page -- true, but unstated: a
+viewer landing on a mistyped or stale link has no way to tell "this type does
+not exist" from any other 404 on the internet. `_untracked_type_page` renders
+a small page instead (still status 404 -- the resource genuinely does not
+exist, so the status line does not change, only the body) that names the
+slug and links every tracked type, built with `render_template_string` so the
+untrusted `<slug>` path segment is Jinja-escaped rather than echoed raw. The
+JSON routes are untouched by this task: `jsonify(error="untracked", slug=slug)`
+already states a reason instead of an empty list, which is what this task
+asks for -- they just never got Flask's default HTML page in the first place.
+
+**Task 5.8: filter-independent figures are read, not recomputed.** `GET
+/api/types/<slug>/figures` wraps `mirror.type_figures.figures_for` (task
+5.7's read path) -- the tow comparison (with its cluster-bootstrap interval),
+vehicle uniqueness and the type-phrased conclusion, computed once per mirror
+reload and stored keyed to the mirror version, never derived per request. A
+canonical type with nothing stored yet for the mirror's current version
+answers `{"available": false, "reason": "..."}` (`figures_for`'s own stated
+reason) rather than a bare `null` or a fallback computation -- this route
+never calls `mirror.per_type`/`mirror.figures` itself. `web/app/index.html`'s
+`#tow-thesis` sentence is what reads this route (see that file's comments);
+every other number on the page still comes from `/api/types/<slug>/doorways`'s
+per-request `summary`, because M11 only moved the figures that do not depend
+on any filter here -- the doorway and block lists stay live.
+
 **Performance stays per-5.5's measurements.** Routing to a different type
 does not change what one request computes: it is still exactly one
 `derive()` call for exactly one canonical type, the same shape 5.5 measured
 (349ms default, 662ms for the largest type, `No Parking Sign`). Nothing here
 calls `derive_all()` or loops over `_SLUG_TO_CANONICAL` to answer one
 request.
+
+**Tasks 7.1/7.3/7.4a: freshness is served, not asserted.** `GET /api/freshness`
+is a thin wrapper over `mirror.status.mirror_freshness` (task 3.3's four
+clocks) and `mirror.status.layer_freshness`'s `behind_source` verdict (task
+3.4) -- nothing here recomputes what that module already derives from
+`layer_state`/`sync_runs`. The one addition is `_call_staleness`: a warning
+when the most recent call the mirror holds is materially older than the
+request's own clock (`STALE_CALL_WARNING_DAYS`, task 7.4a), which is not a
+sync-health question `mirror.status` answers on its own -- a sync can be
+perfectly healthy against a source that has itself gone quiet for a month,
+and that is exactly the case this warns about.
+
+`web/app/index.html`'s header banner (`#freshness`) and footer
+(`#footer-sync-date`) fetch this route and are what makes 7.1's "last
+successful update and expected next update" prominent on every view, and
+what 7.3's dated freshness replaces the removed undated "regenerated from the
+live service" sentence with.
+
+**The timezone trap this route's serialization exists to avoid.** Every
+`timestamptz` column here round-trips through psycopg in the *connection's
+session timezone* -- `America/Halifax` in this codebase's local/test
+Postgres, not UTC -- so `mirror.status`'s datetimes come back tz-aware but
+offset `-03:00`/`-04:00`, not `+00:00`, even though the instant they name is
+identical to a UTC-constructed one. `_iso_utc` below normalizes every
+timestamp to a `+00:00`-offset ISO string before it is serialized, so two
+payloads describing the same instant are also the same *string* -- comparing
+`.isoformat()` output without that normalization is what broke an earlier,
+discarded attempt at this route (three tests failed on offset representation
+alone, not on any actual discrepancy in the instant). Test against the parsed
+`datetime` (or against `_iso_utc` applied the same way to the expected value),
+not against a raw `expected.isoformat()`.
 
 **Why the default type is both a substring match and a canonical type.**
 `derive.DEFAULT_VIOLATION` ("Driveway", `hotspots.load()`'s selection) and the
@@ -111,6 +181,7 @@ on and the one 5.2 extends; task 4.9's reconciliation is what keeps
 Driveway")` provably in step, not this module.
 """
 
+import datetime
 import os
 import pathlib
 import re
@@ -126,9 +197,13 @@ _SRC_DIR = _REPO_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from flask import Flask, abort, jsonify, request, send_from_directory  # noqa: E402
+from flask import (  # noqa: E402
+    Flask, jsonify, render_template_string, request, send_from_directory,
+)
 
-from mirror import db, derive, triage, violation_types  # noqa: E402
+from mirror import (  # noqa: E402
+    db, derive_recency, status, triage, type_figures, violation_types,
+)
 
 WEB_DIR = _REPO_ROOT / "web"
 APP_WEB_DIR = WEB_DIR / "app"
@@ -169,6 +244,109 @@ def _canonical_for_slug(slug):
     a viewer is task 5.3's job, not this function's (module docstring).
     """
     return _SLUG_TO_CANONICAL.get(slug)
+
+
+# ------------------------------------------------------------- untracked type (5.3)
+
+
+_UNTRACKED_TYPE_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Type not tracked</title>
+<style>
+  body{font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+       max-width:640px;margin:64px auto;padding:0 20px;color:#1a1a1a}
+  a{color:#0b5fa5}
+  code{background:#f0f0f0;padding:0 4px;border-radius:3px}
+  ul{padding-left:20px}
+</style>
+</head>
+<body>
+<h1>&ldquo;{{ slug }}&rdquo; is not a tracked type</h1>
+<p>This application only lists doorways and blocks for the canonical violation
+types it tracks (<code>violation_types.CANONICAL_TYPES</code>). That slug is
+not one of them -- it may name a real HRM label this codebase has not frozen,
+or nothing at all.</p>
+<p><a href="/">Go to the default type</a>, or pick one of the {{ types|length }}
+tracked types below:</p>
+<ul>
+{% for slug, name in types %}  <li><a href="/types/{{ slug }}">{{ name }}</a></li>
+{% endfor %}</ul>
+</body>
+</html>
+"""
+
+
+def _untracked_type_page(slug):
+    """Task 5.3: a rendered explanation for a slug `_canonical_for_slug` cannot
+    resolve, in place of Flask's generic "Not Found" page -- `<slug>` is an
+    untrusted path segment, so this goes through `render_template_string`
+    (Jinja auto-escaping) rather than string-formatting it into the page
+    directly. Still answered with a 404 status by the caller: the resource
+    named by the URL genuinely does not exist, only the body now says why.
+    """
+    return render_template_string(
+        _UNTRACKED_TYPE_PAGE, slug=slug,
+        types=sorted(_SLUG_TO_CANONICAL.items(), key=lambda kv: kv[1]),
+    )
+
+
+# ------------------------------------------------------- filter parameters (5.5a, 5.5b)
+
+
+# design.md M11 names five filters as interactive controls: district, minimum
+# recent calls per doorway, minimum still-calling doorways per block, the
+# recurrence window and the recency window. `mirror.derive.derive()` already
+# takes the first four as arguments -- `min_calls`, `min_doorways`,
+# `recur_days`, `district` -- but nothing before this task read them off a
+# request; every call into `derive()` used its defaults regardless of what a
+# viewer might want to see. The recency window is not a `derive()` argument at
+# all yet (task 5.5b, `mirror.derive_recency`), so it is read the same way and
+# passed to `derive_recency.derive_with_recency` instead.
+_FILTER_DEFAULTS = {
+    "min_calls": 2, "min_doorways": 2, "recur_days": 365, "recency_days": 365,
+}
+
+
+def _int_param(name, minimum=0):
+    """One filter's value off the query string, or its `derive()`/
+    `hotspots.build()` default when absent, blank or not a usable integer.
+    Falling back rather than 400ing on a bad value keeps a list/ranking
+    request from ever hard-failing on a malformed control -- 5.5e (reporting
+    an *empty result* distinctly from a failure) is a separate, not-yet-done
+    task, but a value error is not that task's concern to guard against either
+    and should not read as one.
+    """
+    default = _FILTER_DEFAULTS[name]
+    raw = request.args.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
+def _filters_from_request():
+    """Every filter task 5.5a's toolbar controls set: `{district, min_calls,
+    min_doorways, recur_days, recency_days}`. `district` is an opaque string
+    (matched against `derive()`'s own `str(r["district"]) == str(district)`),
+    blank or absent meaning "every district" -- never `0` or `"None"`, which
+    would silently select nothing.
+    """
+    district = request.args.get("district")
+    if district is not None and district.strip() == "":
+        district = None
+    return {
+        "district": district,
+        "min_calls": _int_param("min_calls"),
+        "min_doorways": _int_param("min_doorways"),
+        "recur_days": _int_param("recur_days", minimum=1),
+        "recency_days": _int_param("recency_days", minimum=1),
+    }
 
 
 # ------------------------------------------------------- response shaping
@@ -242,6 +420,77 @@ def _summary(result):
     }
 
 
+# ------------------------------------------------------------- freshness (7.1, 7.3, 7.4a)
+
+
+def _iso_utc(dt):
+    """`dt` normalized to a UTC-offset (`+00:00`) ISO 8601 string, or `None`.
+
+    See this module's docstring ("the timezone trap this route's
+    serialization exists to avoid") for why this matters: without it, two
+    payloads naming the identical instant can serialize to different
+    strings, because psycopg hands datetimes back in the connection's session
+    timezone, not UTC.
+    """
+    return None if dt is None else dt.astimezone(datetime.timezone.utc).isoformat()
+
+
+# Task 7.4a: "materially older" than the run time. Three weeks is longer than
+# every publish interval design.md M3 has observed or guessed at (roughly
+# weekly), so this warns on a source that has gone quiet for multiple missed
+# publishes, not on the ordinary gap between two of them.
+STALE_CALL_WARNING_DAYS = 21
+
+
+def _call_staleness(most_recent_call_date, now=None):
+    """Task 7.4a: is the newest call the mirror holds materially older than
+    `now`? Distinct from `mirror.status`'s `behind_source` (task 3.4), which
+    asks whether *this sync* has fallen behind *the source* -- a sync can be
+    perfectly healthy (polling on schedule, nothing new to pull) while HRM
+    itself has stopped publishing for a month, and that is a limit of HRM's
+    publishing schedule (design.md M4's "whose limit is it"), not a sync
+    defect. This is the one check here that is not a thin read of
+    `mirror.status`, because no clock there answers this question on its own.
+    """
+    now = (now or datetime.datetime.now(datetime.timezone.utc)).astimezone(datetime.timezone.utc)
+    if most_recent_call_date is None:
+        return {
+            "known": False, "stale": False, "days_old": None,
+            "threshold_days": STALE_CALL_WARNING_DAYS,
+            "reason": "the mirror holds no calls yet",
+        }
+    age_days = (now - most_recent_call_date.astimezone(datetime.timezone.utc)).total_seconds() / 86400
+    stale = age_days > STALE_CALL_WARNING_DAYS
+    return {
+        "known": True,
+        "stale": stale,
+        "days_old": round(age_days, 1),
+        "threshold_days": STALE_CALL_WARNING_DAYS,
+        "reason": (
+            f"the most recent call in the data is {round(age_days)} days old, "
+            f"past the {STALE_CALL_WARNING_DAYS}-day warning threshold"
+        ) if stale else None,
+    }
+
+
+def _freshness_payload(freshness, now=None):
+    """The `GET /api/freshness` JSON body: a thin reshaping of
+    `mirror.status.mirror_freshness`'s dict (every field except
+    `stale_call_warning` is read off it, not recomputed), with every
+    timestamp normalized through `_iso_utc`.
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    return {
+        "checked_at": _iso_utc(now),
+        "most_recent_call_date": _iso_utc(freshness["most_recent_call_date"]),
+        "last_success_at": _iso_utc(freshness["last_success_at"]),
+        "last_attempt_at": _iso_utc(freshness["last_attempt_at"]),
+        "next_due_at": _iso_utc(freshness["next_due_at"]),
+        "behind_source": freshness["behind_source"],
+        "stale_call_warning": _call_staleness(freshness["most_recent_call_date"], now=now),
+    }
+
+
 # --------------------------------------------------------------- app factory
 
 
@@ -270,13 +519,12 @@ def create_app(conn_factory=None):
         `web/app/index.html`'s boot script reads `<slug>` back out of
         `location.pathname` (its `SLUG` constant) to decide which type's data
         to fetch, the same script regardless of which type that turns out to
-        be. An untracked slug 404s here the same bare way the JSON routes do
-        (`_canonical_for_slug`); rendering that as a stated reason instead of
-        a bare 404 is task 5.3's job, not this route's -- see the module
-        docstring's "explicitly not yours" note.
+        be. An untracked slug answers a rendered explanation instead of
+        Flask's bare default 404 page (task 5.3, `_untracked_type_page`) --
+        still a 404 status, since the resource genuinely does not exist.
         """
         if _canonical_for_slug(slug) is None:
-            abort(404)
+            return _untracked_type_page(slug), 404
         return send_from_directory(APP_WEB_DIR, "index.html")
 
     @app.get("/map-network.json")
@@ -330,34 +578,55 @@ def create_app(conn_factory=None):
 
     @app.get("/api/types/<slug>/doorways")
     def doorways(slug):
+        """Task 5.5a: `district`, `min_calls`, `min_doorways`, `recur_days` and
+        `recency_days` are read off the query string (`_filters_from_request`)
+        and threaded through to the derivation, so the toolbar's controls
+        change what this route returns rather than only what the page filters
+        client-side afterward. `filters` echoes the values this response was
+        actually computed from -- default query string, default filters,
+        exactly `derive()`'s own defaults.
+        """
         canonical = _canonical_for_slug(slug)
         if canonical is None:
             return jsonify(error="untracked", slug=slug), 404
+        filters = _filters_from_request()
         conn = connect()
         try:
-            result = derive.derive(conn, canonical_type=canonical)
+            result = derive_recency.derive_with_recency(
+                conn, canonical_type=canonical, **filters,
+            )
         finally:
             conn.close()
         return jsonify(
             type=canonical, slug=slug, count=len(result["rows"]),
             latest=result["latest"].strftime("%Y-%m-%d") if result["latest"] else None,
-            summary=_summary(result),
+            summary=_summary(result), filters=filters,
             rows=_doorway_payload(result["rows"]),
         )
 
     @app.get("/api/types/<slug>/blocks")
     def blocks(slug):
+        """Task 5.5a: same filters as `doorways()` above, read the same way --
+        a block list is rolled up from exactly the doorway rows those filters
+        produced (`mirror.derive_recency.derive_with_recency` runs
+        `hotspots.roll_blocks` on its own filtered `rows`, same as `derive()`),
+        so the two routes never disagree about which doorways a given filter
+        combination includes.
+        """
         canonical = _canonical_for_slug(slug)
         if canonical is None:
             return jsonify(error="untracked", slug=slug), 404
+        filters = _filters_from_request()
         conn = connect()
         try:
-            result = derive.derive(conn, canonical_type=canonical)
+            result = derive_recency.derive_with_recency(
+                conn, canonical_type=canonical, **filters,
+            )
         finally:
             conn.close()
         return jsonify(
             type=canonical, slug=slug, count=len(result["blocks"]),
-            blocks=_block_payload(result["blocks"]),
+            filters=filters, blocks=_block_payload(result["blocks"]),
         )
 
     @app.get("/api/types/<slug>/decisions")
@@ -381,16 +650,17 @@ def create_app(conn_factory=None):
     @app.post("/api/types/<slug>/decisions")
     def post_decision(slug):
         """Record one decision (task 6.1). Body: `{scope, item_key, decision,
-        note}` -- `note` optional. Upserts on `triage_decisions`'
-        `(violation_type, scope, item_key)` UNIQUE constraint via
-        `mirror.triage.record`, so a second call for the same doorway or
-        block updates the existing row rather than duplicating it.
+        note, role}` -- `note` and `role` optional. Upserts on
+        `triage_decisions`' `(violation_type, scope, item_key)` UNIQUE
+        constraint via `mirror.triage.record`, so a second call for the same
+        doorway or block updates the existing row rather than duplicating it.
 
-        `role` is not read from the request: task 6.6 is what asks a viewer
-        for one and threads it through here. Until then `mirror.triage`
-        writes its own placeholder -- the column is `NOT NULL`, so something
-        has to be written, and writing a defensible placeholder in one place
-        (see `mirror.triage.PLACEHOLDER_ROLE`) is that something.
+        `role` (task 6.6): the viewer's chosen role, asked for by
+        `web/app/index.html`'s `ensureRole()` before a decision is ever sent
+        here. When the body carries no `role` (an older client, or a request
+        that omits it outright) `mirror.triage.record` falls back to
+        `PLACEHOLDER_ROLE` -- the column is `NOT NULL`, so something sane has
+        to land there either way; a real role from the request always wins.
 
         A malformed request (bad scope, missing item_key/decision) answers
         400 from `mirror.triage.record`'s `ValueError` without touching the
@@ -413,6 +683,7 @@ def create_app(conn_factory=None):
                     item_key=body.get("item_key"),
                     decision=body.get("decision"),
                     note=body.get("note"),
+                    role=body.get("role"),
                 )
             except ValueError as exc:
                 conn.rollback()
@@ -424,6 +695,61 @@ def create_app(conn_factory=None):
         finally:
             conn.close()
         return jsonify(type=canonical, slug=slug, **recorded)
+
+    @app.get("/api/types/<slug>/figures")
+    def type_figures_route(slug):
+        """A type's filter-independent figures (task 5.8): the tow comparison
+        (with its cluster-bootstrap interval), vehicle uniqueness and the
+        type-phrased conclusion `mirror.type_figures.compute_and_store`
+        stores once per mirror reload (task 5.7) -- read here via
+        `mirror.type_figures.figures_for`, never recomputed per request
+        (design.md M12's "figures that do not depend on filters...").
+
+        `available` is `false` with a stated `reason` -- never a computed
+        number, never a bare `null` -- when this canonical type has no row
+        yet for the mirror's current version and the default parameter set:
+        a reload that has not yet run `type_figures.compute_and_store()` for
+        it. `web/app/index.html`'s `#tow-thesis` sentence is the one piece of
+        markup that reads this route; every other figure on the page comes
+        from `/api/types/<slug>/doorways`'s per-request `summary` instead,
+        because those depend on nothing this route stores.
+        """
+        canonical = _canonical_for_slug(slug)
+        if canonical is None:
+            return jsonify(error="untracked", slug=slug), 404
+        conn = connect()
+        try:
+            result = type_figures.figures_for(conn, canonical)
+        finally:
+            conn.close()
+        payload = {"type": canonical, "slug": slug, "available": result["available"]}
+        if result["available"]:
+            payload["figures"] = result["figures"]
+            # `_iso_utc`, not a raw `.isoformat()` -- this module's docstring's
+            # "the timezone trap this route's serialization exists to avoid"
+            # applies here too: psycopg hands `computed_at` back in the
+            # connection's session timezone, not UTC.
+            payload["computed_at"] = _iso_utc(result["computed_at"])
+        else:
+            payload["reason"] = result["reason"]
+        return jsonify(**payload)
+
+    @app.get("/api/freshness")
+    def freshness():
+        """Tasks 7.1/7.3/7.4a: the four clocks design.md M4 names, plus 7.4a's
+        stale-call warning -- see this module's docstring and
+        `_freshness_payload`'s for the shape and the timezone-normalization
+        rationale. `web/app/index.html`'s header banner and footer read this
+        on every view; no route parameter, no per-type distinction -- the
+        mirror has one set of these clocks regardless of which canonical type
+        a viewer is looking at.
+        """
+        conn = connect()
+        try:
+            fresh = status.mirror_freshness(conn)
+        finally:
+            conn.close()
+        return jsonify(_freshness_payload(fresh))
 
     return app
 

@@ -21,19 +21,23 @@ here is scoped by `violation_type`, so a decision recorded against one type's
 list is invisible to another type's list -- there is no query in this module
 that can return a row for a type it was not asked for.
 
-`role` is task 6.6's column, not this one's, but `schema.sql` makes it
-`NOT NULL`, so something sane has to be written today. `PLACEHOLDER_ROLE`
-below is that something -- deliberately inert, written in exactly one place
-so 6.6 (ask for a role before a decision is recorded) has one place to change
-it into a role the viewer actually picked.
+`role` (task 6.6): `web/app/index.html`'s `ensureRole()` asks a viewer to pick
+one before their first decision is ever sent here, and every request from
+that page since carries it in the POST body. `schema.sql` makes the column
+`NOT NULL`, though, so a request that omits `role` outright -- an older
+client, or a bare API call made by hand -- still needs something written.
+`PLACEHOLDER_ROLE` below is that fallback, not the normal case: `record()`
+only reaches for it when the caller passed no role at all.
 """
 
 VALID_SCOPES = ("doorway", "block")
 
-# 6.6 replaces this with a role selected by the viewer before a decision is
-# recorded. Until then, every decision this module writes carries this value
-# -- picked to read obviously as a placeholder rather than as a real role, so
-# nobody mistakes a demo's worth of "unspecified" rows for attribution data.
+# The fallback `record()` writes when a caller supplies no role (task 6.6
+# asks the served page's own viewers for one before they ever get here, so
+# this is reached only by a request that skips that prompt entirely) --
+# picked to read obviously as a placeholder rather than as a real role, so
+# nobody mistakes an unattributed row for a viewer who declined to identify
+# a role that was in fact asked for.
 PLACEHOLDER_ROLE = "unspecified"
 
 
