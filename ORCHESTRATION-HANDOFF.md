@@ -138,6 +138,17 @@ driveway footer and Ask-Claude prompt were NOT touched (concern 11, deferred to 
     evidence) cannot pass until both are made type-specific or removed. **User decision: these two
     text fixes are deferred, and are to be made when Section 9 is being dispatched** (as a
     precondition to 9.8), not in the next pool. Also noted on 9.8's line in `tasks.md`.
+    **User decisions on how (after Pool 9):** (1) *Footer:* filling the driveway figures from the
+    payload would be well over 10 lines (the "7,651 of 9,791 driveway calls just say HALIFAX" count has
+    no payload source, so it needs a new per-type query, a payload field, page code and a test), so
+    **remove** the "Why blocks" `<h3>` and its two paragraphs (`index.html` ~538-545) instead. Keep the
+    rest of the `<footer>`: "The map" (type-independent) and "Read these numbers carefully" with the six
+    numbered `lim-*` limits that 7.5's bracketed links target. No test depends on the removed text.
+    (2) *Ask-Claude prompt:* use the payload's type name instead of "blocked-driveway"; keep the
+    "Enforcement has already been tried and towing does not change the recurrence rate" sentence only
+    when that type's own tow figures support it, otherwise drop it; make the measure list
+    type-neutral or drop it (the button only shows when a `sampler` capability exists). (3) Both go in
+    **the first Section 9 pool**, ahead of 9.8.
 12. ~~Export race in Pool 9~~ done; the user's "what you did was correct" confirmed the reading.
 13. **Interpretation in 8.7's caveat:** "the only way a list leaves the application" is read as the
     served application. `src/mirror/derive.py` and `src/hotspots.py` (the 4.9/9.4 live baseline) still
