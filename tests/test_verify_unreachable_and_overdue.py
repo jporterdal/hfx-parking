@@ -820,14 +820,12 @@ def test_the_api_does_not_attribute_the_lag_to_HRM_while_the_sync_is_overdue(
 
 
 @_NEEDS_NODE
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT A: inside the grace period (due time passed, not yet overdue) the banner "
-    "renders 'Next update expected <a time already in the past>'; the script only "
-    "branches on next_update.overdue and never checks the time against now "
-    "(hosted-triage-app: 'SHALL NOT continue displaying a future update time once "
-    "that time has passed'; scenario 'no past time is displayed as an upcoming update')"))
 def test_inside_the_grace_period_a_passed_due_time_is_not_shown_as_expected(
         client, clean_db, monkeypatch):
+    """9.2 defect A, fixed: hosted-triage-app "SHALL NOT continue displaying a future
+    update time once that time has passed". Inside the grace period (due time
+    passed, not yet overdue) the banner says the sync was due then and has not
+    completed yet; it is not the overdue state and it is not "expected"."""
     freeze_server_clock(monkeypatch, NOW)
     due = NOW - 6 * HOUR
     seed_clocks(clean_db, success=NOW - 30 * HOUR, due=due)
@@ -835,16 +833,45 @@ def test_inside_the_grace_period_a_passed_due_time_is_not_shown_as_expected(
     payload, out = banner_for(client, monkeypatch, probes=(payload_iso(due),))
 
     assert payload["next_update"]["overdue"] is False and at(payload["next_due_at"]) < NOW
+    assert payload["next_update"]["due_passed"] is True
     assert f"Next update expected {out['probes'][payload_iso(due)]}" not in out["text"]
+    assert "Next update expected" not in out["text"]
+    assert (f"The next sync was due {out['probes'][payload_iso(due)]} and has not completed yet."
+            in out["text"])
+    assert not re.search(r"\boverdue\b", out["text"])
+    assert "overdue" not in out["classes"]
 
 
 @_NEEDS_NODE
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFECT B: the overdue banner says when the sync was due but never states how long "
-    "it has been overdue; the script ignores next_update.days_overdue "
-    "(hosted-triage-app: 'the message SHALL change to an overdue state naming how long "
-    "it has been overdue')"))
+@pytest.mark.parametrize("due_zone", [UTC, HALIFAX, IST], ids=["utc", "halifax", "ist"])
+@pytest.mark.parametrize("passed_by,expected", [
+    (-HOUR, True), (-SECOND, True), (datetime.timedelta(0), True),
+    (SECOND, False), (HOUR, False), (GRACE, False),
+], ids=["due-in-1h", "due-in-1s", "due-exactly-now", "passed-1s", "passed-1h", "at-grace-end"])
+def test_a_due_time_is_shown_as_expected_only_while_it_is_not_in_the_past(
+        client, clean_db, monkeypatch, due_zone, passed_by, expected):
+    """9.2 defect A, boundary: `passed_by` is how long after the due time "now" is.
+    Up to and including the instant itself the time is still upcoming; one second
+    after, it is never "expected" again (the due time stored in three offsets,
+    now 23:30 in Halifax so the local date differs from UTC's)."""
+    freeze_server_clock(monkeypatch, NOW)
+    due = (NOW - passed_by).astimezone(due_zone)
+    seed_clocks(clean_db, success=due - DAY, due=due)
+
+    payload, out = banner_for(client, monkeypatch, probes=(payload_iso(due),))
+
+    assert payload["next_update"]["overdue"] is False
+    assert (at(payload["next_due_at"]) - NOW) == -passed_by
+    shown = out["probes"][payload_iso(due)]
+    assert (f"Next update expected {shown}." in out["text"]) is expected
+    assert (f"The next sync was due {shown} and has not completed yet." in out["text"]) is (not expected)
+
+
+@_NEEDS_NODE
 def test_the_overdue_banner_names_how_long_it_has_been_overdue(client, clean_db, monkeypatch):
+    """9.2 defect B, fixed: hosted-triage-app "the message SHALL change to an overdue
+    state naming how long it has been overdue". The API's `days_overdue` (19.0) is
+    counted from the end of the grace period, so the banner says so."""
     freeze_server_clock(monkeypatch, NOW)
     seed_clocks(clean_db, success=NOW - 21 * DAY, due=NOW - 20 * DAY)
 
@@ -853,6 +880,56 @@ def test_the_overdue_banner_names_how_long_it_has_been_overdue(client, clean_db,
     days = payload["next_update"]["days_overdue"]                      # 19.0 from the API
     assert days == 19.0
     assert re.search(r"\b19(\.0)?\s+days?\b", out["text"]), out["text"]
+    assert "Next update is overdue by 19 days (counted after a 1-day grace period): it was due" \
+        in out["text"]
+
+
+@_NEEDS_NODE
+@pytest.mark.parametrize("overdue_for,phrase", [
+    (SECOND, "less than an hour"),
+    (59 * 60 * SECOND + 59 * SECOND, "less than an hour"),
+    (HOUR, "1 hour"),
+    (5 * HOUR + 40 * 60 * SECOND, "5 hours"),
+    (DAY - SECOND, "23 hours"),
+    (DAY, "1 day"),
+    (DAY + 2 * HOUR, "1 day"),                            # 1.08 days, floored to one decimal
+    (DAY + 3 * HOUR, "1.1 days"),                         # 1.125
+    (36 * HOUR, "1.5 days"),
+    (2 * DAY - SECOND, "1.9 days"),                       # never rounded up to 2
+    (2 * DAY, "2 days"),
+    (19 * DAY, "19 days"),
+    (19 * DAY + 20 * HOUR, "19.8 days"),
+], ids=lambda v: v if isinstance(v, str) else None)
+def test_the_overdue_length_is_worded_by_unit_and_never_rounded_up(
+        client, clean_db, monkeypatch, overdue_for, phrase):
+    """9.2 defect B, units: `overdue_for` is how long after the END of the grace
+    period "now" is (so the sync was due `overdue_for + 1 day` ago). Singular and
+    plural, hours below a day, and floored rather than rounded."""
+    freeze_server_clock(monkeypatch, NOW)
+    due = NOW - GRACE - overdue_for
+    seed_clocks(clean_db, success=due - DAY, due=due)
+
+    payload, out = banner_for(client, monkeypatch)
+
+    assert payload["next_update"]["overdue"] is True
+    assert payload["next_update"]["seconds_overdue"] == int(overdue_for.total_seconds())
+    assert f"Next update is overdue by {phrase} (counted after a 1-day grace period): " in out["text"]
+
+
+@_NEEDS_NODE
+def test_the_overdue_banner_does_not_name_a_length_it_was_not_given(client, clean_db, monkeypatch):
+    """A payload without the length (an older API) still reads overdue, with no
+    invented duration; and a healthy one carries neither."""
+    freeze_server_clock(monkeypatch, NOW)
+    seed_clocks(clean_db, success=NOW - 21 * DAY, due=NOW - 20 * DAY)
+    payload = client.get("/api/freshness").get_json()
+    payload["next_update"].pop("seconds_overdue")
+    payload["next_update"].pop("days_overdue")
+
+    out = run_banner(index_body(client), payload)
+
+    assert "Next update is overdue: it was due" in out["text"]
+    assert " overdue by " not in out["text"]
 
 
 @_NEEDS_NODE

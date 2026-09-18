@@ -1,0 +1,24 @@
+# Worker I progress (FINAL, stopped early on the coordinator's usage-limit order)
+
+## Status per defect
+- A (grace window shows a past time as "expected"): DONE. Fix in place, xfail removed, passing. Scratch-revert check DONE (10 failed when reverted, 19 passed on the real tree).
+- B (overdue banner names no duration): DONE. Fix in place, xfail removed, passing. Scratch-revert check NOT DONE (see next steps).
+- C (passed HRM estimate shown as upcoming): NOT STARTED. xfail still on `test_a_passed_estimate_of_HRMs_next_publish_is_not_shown_as_upcoming`.
+- D (stalled sync labelled HRM's limit): NOT STARTED. xfails still on `test_a_stalled_sync_is_never_labelled_as_HRMs_limit` and `test_the_api_does_not_attribute_the_lag_to_HRM_while_the_sync_is_overdue`.
+- E (triage updated_at = now()): NOT STARTED. xfail still on tests/test_verify_shared_triage.py::test_the_last_writers_changed_time_is_later_even_if_its_connection_opened_first.
+
+## Files touched
+- src/app/server.py, `_next_update_state`: added `due_passed` (now > next_due_at; False when no due time) and `seconds_overdue` (int seconds, floored; None unless overdue) to the returned dict (both branches).
+- web/app/index.html, freshness banner IIFE (about lines 785-830): new `overdueFor()` helper; overdue sentence is now "Next update is overdue by N days (counted after a 1-day grace period): it was due X and no sync has completed successfully since." (hours under a day, "less than an hour" under an hour, one-decimal days floored, singular/plural); inside the grace window ("due_passed" and not overdue) it says "The next sync was due X and has not completed yet." instead of "Next update expected X."
+- tests/test_verify_unreachable_and_overdue.py: removed the xfail markers of A and B (and rewrote their docstrings); added `test_a_due_time_is_shown_as_expected_only_while_it_is_not_in_the_past` (18 boundary cases, 3 offsets), `test_the_overdue_length_is_worded_by_unit_and_never_rounded_up` (13 cases), `test_the_overdue_banner_does_not_name_a_length_it_was_not_given`.
+- Nothing under openspec/, no ORCHESTRATION-HANDOFF.md, no dispatch-plan.md, no commit. `tests/test_verify_served_matches_derive.py` (untracked) is NOT mine.
+
+## Last test commands
+`python -m pytest -p no:cacheprovider -o addopts="" -q tests/test_verify_unreachable_and_overdue.py tests/test_app.py` -> 220 passed, 3 xfailed (the 3 are C and the two D tests). Then the A/B-related subset `-k "grace or due_time or overdue or banner"` -> 82 passed, 3 xfailed. Full suite not run after the edits. Note: the repo's addopts is `-q`, so plain `-q` prints no summary line; use `-o addopts="" -q`.
+
+## Next steps for a new worker
+1. B scratch-revert proof: copy the tree to `<scratchpad>/worker-I/` (git ls-files ... | cp --parents), revert the overdue sentence in the scratch index.html to the old text ("Next update is overdue: it was due ..."), and show `test_the_overdue_banner_names_how_long_it_has_been_overdue` and `test_the_overdue_length_is_worded_by_unit_and_never_rounded_up` fail there and pass on the real tree.
+2. C: server `_next_source_estimate` add `"passed": estimated_next <= now` (False in the not-known branch); banner: when `sourceEstimate.known && passed` word it in the past ("would have been expected around X; this mirror has not observed a newer publish") or drop the clause; keep the not-passed wording and "an estimate, not a promise" (tests/test_app.py pins "HRM itself is estimated to next publish around" and "estimate, not a promise" as static text in the page). Remove the C xfail; add a boundary test.
+3. D: in server.py `_freshness_payload`, compute `next_update` first and pass "overdue" into `_behind_reason` so that, when overdue and not behind_source, `behind_reason` does not say "not to this sync" / HRM's publishing schedule (e.g. "this sync is overdue, so this mirror cannot tell whether HRM has published since; the lag cannot be put down to HRM's publishing schedule until a sync completes"). Banner: when `nextUpdate.overdue` and not `behind_source`, replace the "caught up with HRM ... not a problem with this mirror" sentence with that truthful one (keep the healthy-sync wording, which tests/test_app.py and `test_a_source_that_has_not_published...` pin). Remove both D xfails. CSV/brief read `behind_reason` from the payload, so they follow.
+4. E: src/mirror/triage.py `record()`: add `updated_at` to the INSERT columns with `clock_timestamp()` and change `updated_at = now()` to `updated_at = clock_timestamp()` in DO UPDATE; remove the xfail in tests/test_verify_shared_triage.py; scratch-revert proof. Other `now()` writers (load.py load_progress/sync_runs, type_figures, history) are single-writer bookkeeping, not contested changed-times; report them.
+5. Then run the full suite with `-o addopts="" -q`, `--runxfail` proof per defect, and `git status --short`.

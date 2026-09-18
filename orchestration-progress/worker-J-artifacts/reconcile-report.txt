@@ -1,0 +1,37 @@
+
+Figure-level reconciliation: violation='Driveway'
+
+Freshness (live editingInfo.lastEditDate vs mirror layer_state):
+  service_requests   mirror=2026-09-13 07:34:17.313000-03:00  live=2026-09-13 10:34:17.313000+00:00  current
+  custom_fields      mirror=2026-09-13 07:38:16.944000-03:00  live=2026-09-13 10:38:16.944000+00:00  current
+
+scratch directory: /tmp/claude-1000/-home-ross-work-hfx-parking/f5305660-cf05-4837-8db3-a71dce92ad31/scratchpad/worker-J/reconcile
+live pipeline exit: 0
+mirror derivation exit: 0
+
+Normalised before comparing (documented, expected differences):
+  - watchlist.csv: dropped mirror-only freshness columns ['derived_at', 'last_sync_success_at', 'most_recent_call_date'] (4.7) before comparing
+  - blocks.csv: dropped mirror-only freshness columns ['derived_at', 'last_sync_success_at', 'most_recent_call_date'] (4.7) before comparing
+  - watchlist.md: dropped mirror-only freshness note line and its leading blank line (4.7) before comparing
+  - blocks.md: dropped mirror-only freshness note line and its leading blank line (4.7) before comparing
+
+watchlist.csv:
+  live 351  mirror 351
+  identical
+
+blocks.csv:
+  live 70  mirror 70
+  identical
+
+watchlist.md:
+  live 66 lines  mirror (normalized) 66 lines
+  identical
+
+blocks.md:
+  live 48 lines  mirror (normalized) 48 lines
+  identical
+
+out/triage-board.html: not compared. The standalone board was retired under task 8.7 (last present at b04731c): src/hotspots.py no longer writes one and mirror.derive never did, so neither side of this run produces a board. The comparison covers only the four list files (watchlist/blocks CSVs and briefs); the served application's own pages are outside it.
+
+RECONCILED
+exit 0

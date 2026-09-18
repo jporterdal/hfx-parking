@@ -789,12 +789,37 @@ let TOW_KEY = null;
      * passed by its grace period with no successful sync since -- so this
      * client never re-derives that arithmetic, only branches on it. */
     const nextUpdate = f.next_update || {};
+    /* How long it has been overdue, from the server's own figure
+     * (`seconds_overdue`: time since the due time plus the grace period ran
+     * out, floored -- never rounded up, so it is not overstated). Under an hour
+     * says so, under a day counts whole hours, from a day up counts days to one
+     * decimal place. */
+    const overdueFor = secs => {
+      if (secs == null || !isFinite(secs) || secs < 0) return null;
+      if (secs < 3600) return "less than an hour";
+      if (secs < 86400){ const h = Math.floor(secs / 3600); return `${h} hour${h === 1 ? "" : "s"}`; }
+      const tenths = Math.floor(secs * 10 / 86400);
+      return `${tenths % 10 === 0 ? tenths / 10 : (tenths / 10).toFixed(1)} day${tenths === 10 ? "" : "s"}`;
+    };
+    const overdueSecs = nextUpdate.seconds_overdue != null ? nextUpdate.seconds_overdue
+      : (nextUpdate.days_overdue != null ? nextUpdate.days_overdue * 86400 : null);
+    const overdueLength = nextUpdate.overdue ? overdueFor(overdueSecs) : null;
+    const graceDays = nextUpdate.grace_period_days;
     const parts = [
       lastSync ? `Last updated ${lastSync}.` : "This mirror has not completed a sync yet.",
       nextUpdate.overdue
-        ? `Next update is overdue: it was due ${nextDue || "earlier"} and no sync `
+        ? "Next update is overdue"
+          + (overdueLength ? ` by ${overdueLength}` : "")
+          + (overdueLength && graceDays ? ` (counted after a ${graceDays}-day grace period)` : "")
+          + `: it was due ${nextDue || "earlier"} and no sync `
           + "has completed successfully since."
-        : (nextDue ? `Next update expected ${nextDue}.` : "Next update time not yet known."),
+        : nextUpdate.due_passed && nextDue
+          /* Inside the grace period: the due time has passed but the sync is
+           * not yet overdue. A time that has passed is never shown as
+           * upcoming, so say only what is known -- it was due, and has not
+           * completed yet. */
+          ? `The next sync was due ${nextDue} and has not completed yet.`
+          : (nextDue ? `Next update expected ${nextDue}.` : "Next update time not yet known."),
     ];
     if (nextUpdate.overdue && header) header.classList.add("overdue");
     const warning = f.stale_call_warning;

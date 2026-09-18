@@ -605,6 +605,7 @@ def _next_update_state(freshness, now=None):
     if next_due_at is None:
         return {
             "known": False, "overdue": False, "days_overdue": None,
+            "seconds_overdue": None, "due_passed": False,
             "grace_period_days": grace_days,
             "reason": "no sync has ever recorded a due time",
         }
@@ -624,7 +625,23 @@ def _next_update_state(freshness, now=None):
     return {
         "known": True,
         "overdue": overdue,
+        # The due time is behind us, whether or not the grace period has run
+        # out yet. A client must never render `next_due_at` as an upcoming
+        # time while this is true (hosted-triage-app: "SHALL NOT continue
+        # displaying a future update time once that time has passed"); inside
+        # the grace period (`overdue` still false) it says the sync was due
+        # and has not completed yet, which is all that is known. A successful
+        # poll always moves `next_due_at` past its own completion time, so
+        # "due time passed" and "a success since it" do not co-occur in
+        # practice; the plain comparison is used so that no past time can
+        # be shown as upcoming even if they somehow did.
+        "due_passed": now > next_due_at,
         "days_overdue": round((now - overdue_at).total_seconds() / 86400, 1) if overdue else None,
+        # The same span in whole seconds, floored (never rounded up), so a
+        # client can name a period shorter than a day honestly: `days_overdue`
+        # is rounded to a tenth of a day (2.4 hours) and reads 0.0 for the
+        # first hour or so of being overdue.
+        "seconds_overdue": int((now - overdue_at).total_seconds()) if overdue else None,
         "grace_period_days": grace_days,
         "reason": (
             f"the sync was due {round((now - next_due_at).total_seconds() / 86400, 1)} "
