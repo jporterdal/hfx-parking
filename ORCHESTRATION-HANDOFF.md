@@ -125,9 +125,12 @@ later task (8.9) or one-off; the `--board` removal was done as a one-off here.
 11. **Driveway-specific text on every type's page (bears on 9.8).** The "Why blocks" footer hard-codes
     driveway numbers on every type's page, and the Ask-Claude prompt says "blocked-driveway
     complaints" for every type. 9.8 (no type presents blocked driveway's conclusion without its own
-    evidence) cannot pass until both are made type-specific or removed.
-12. **The user has not yet decided** whether to run a follow-up pool for concerns 10 and 11 before
-    section 9, or leave them for section 9's findings.
+    evidence) cannot pass until both are made type-specific or removed. **User decision: these two
+    text fixes are deferred, and are to be made when Section 9 is being dispatched** (as a
+    precondition to 9.8), not in the next pool. Also noted on 9.8's line in `tasks.md`.
+12. **Export race (concern 10) is in the next pool** on the orchestrator's reading of the user's
+    instruction, which was ambiguous ("the two text fixes and delay"). If the user meant to defer it
+    too, say so before the worker's changes are committed; it is a small, self-contained change.
 13. **Interpretation in 8.7's caveat:** "the only way a list leaves the application" is read as the
     served application. `src/mirror/derive.py` and `src/hotspots.py` (the 4.9/9.4 live baseline) still
     write lists to a caller-named directory, and the JSON routes feed the page.
@@ -148,10 +151,27 @@ later task (8.9) or one-off; the `--board` removal was done as a one-off here.
   `python3 src/hotspots.py`; the known sites are listed in its `tasks.md` line). Comments, docstrings
   and docs across several files, including `server.py`, `index.html` and `test_app.py` — one worker
   owns all of those, so it cannot run beside a worker that edits them.
-- **Concerns 10 and 11** above (export race; driveway-specific footer and Ask-Claude prompt). Not
-  numbered tasks; both live in `server.py`/`index.html`/`test_app.py`.
-- **Section 9** (verification) is now reachable: 9.1–9.8 have their dependencies met. 9.8 should
-  wait for concern 11; 9.5 is best run after concern 10.
+- **Concern 10** (export race). Not a numbered task; lives in `server.py`/`test_app.py`.
+- **Concern 11** (driveway-specific footer and Ask-Claude prompt) is **deferred to Section 9's
+  dispatch** by the user's decision, as a precondition to 9.8.
+- **Section 9** (verification) is now reachable: 9.1–9.8 have their dependencies met. 9.8 waits for
+  concern 11; 9.5 is best run after concern 10.
+
+**Next pool, as planned with the user (dispatch after the user has run `/compact`)** — two Sonnet
+workers, in parallel, no commits, no `tasks.md` edits:
+- **Worker G: 8.5 alone.** Owns `docs/parking-hotspots/decisions.md` only. Records the decisions this
+  change makes (mirror, source-paced sync, served application, shared triage, role selection, removal
+  of the scheduled job) with reasons, plus the M12 outcome and the `b04731c` pointer, and verifies the
+  narrative against the specs and `design.md`. Must not touch `product.md` (8.9's) or code. Note 8.1
+  left `decisions.md`'s original figures as a historical record: do not "correct" them.
+- **Worker H: 8.9 + the export race fix (concern 10).** Owns every file listed on 8.9's `tasks.md`
+  line (`server.py`, `index.html`, `test_app.py`, `reconcile_figures.py`, `derive.py`, `triage.py`,
+  `history.py`, `schema.sql`, `tests/test_history.py`, `docs/parking-hotspots/product.md`) but NOT
+  `decisions.md`. For the race: read an export's rows and freshness clocks in one transaction or
+  snapshot, and prove it with a constructed case (a sync landing between the two reads), not by
+  reasoning. Do not touch the driveway footer or Ask-Claude prompt (deferred).
+Two tasks per worker where the regions allow it: H has two; G has one because nothing else in the
+ready set is docs-only.
 
 **Region split:** 8.5 touches only `docs/parking-hotspots/decisions.md`; 8.9 and concerns 10/11 all
 touch `server.py`/`index.html`/`test_app.py`, so they go to one worker (or run in sequence), while
