@@ -2510,7 +2510,12 @@ def test_served_view_names_its_type_from_the_payload_not_a_hard_coded_default(cl
     assert "blocked driveway service requests" not in markup
     assert 'violation type: <span id="type-name">' in markup
     assert 'id="list-type"' in markup
-    assert 'const typeName = doorPayload.type || blockPayload.type || "";' in body
+    # Task 9.8: the same value is what the Ask-Claude prompt names, so it has
+    # one definition (`pageTypeName`) that both the header fill and the prompt
+    # read -- not a second copy of `doorPayload.type || ...` beside it.
+    assert 'const pageTypeName = () => doorPayload.type || blockPayload.type || "";' in body
+    assert body.count("doorPayload.type || blockPayload.type") == 1
+    assert 'const typeName = pageTypeName();' in body
     assert 'set("type-name", typeName || "unknown");' in body
     assert 'set("list-type", typeName ? `Violation type: ${typeName}` : "");' in body
     assert "document.title = `${typeName} · ${document.title}`" in body

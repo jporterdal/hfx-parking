@@ -12,7 +12,7 @@ Verify before trusting anything below — an agent's report is a claim, not evid
 ```bash
 git status --short          # whose files changed
 git diff                    # what actually landed vs. what was claimed
-python -m pytest -q         # 529 tests as of the Pool 9 checkpoint, all passing
+python -m pytest -q         # 791 tests as of the Pool 10 checkpoint (6 strict xfails, see below), all green
 openspec validate mirror-hrm-data-and-host-app --strict
 ```
 
@@ -22,15 +22,14 @@ something nobody verified. This happened once already in this change (see "Histo
 
 ## State at last commit
 
-The **Pool 9 checkpoint** (`git log -1`; its parent is the doc-only `05a16ce`, after the Pool 8
-checkpoint `be723cf`). 529 tests, all passing; `openspec validate --strict` clean, both run on the
-working tree just before committing.
+The **Pool 10 checkpoint** (`git log -1`; before it, the doc-only handoff commit `941c5ab` and the
+Pool 9 checkpoint `197f8c7`). 791 tests collected, all green including **6 strict xfails** (known defects,
+below); `openspec validate --strict` clean, both run on the working tree just before committing.
 
-Complete through: sections 1–4 entirely, 5.1–5.8, 6.1–6.7, 7.1–7.8 entirely, 8.1 (partial, see its
-note), 8.1a, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9. **Not done:** all of section 9 (9.1–9.8).
-**Section 8 is complete.** Several completed tasks carry
-caveats in their `tasks.md` lines (7.7, 7.8, 8.4, 8.5, 8.7, 8.9 especially); read them before treating a task
-as fully closed.
+Complete through: sections 1–8 entirely, and in section 9: **9.1, 9.3, 9.5, 9.6, 9.7, 9.8**.
+**Not done: 9.2 (four defects found, left unticked on purpose) and 9.4 (live baseline, not yet run).**
+Several completed tasks carry caveats in their `tasks.md` lines (7.7, 7.8, 8.4, 8.5, 8.7, 8.9, and all
+of 9.x especially); read them before treating a task as fully closed.
 
 **7.2b and 7.7 were ticked on the user's word** (another agent had verified them; the orchestrator
 only confirmed pytest and `openspec validate` were green) — see Pool 7 under History.
@@ -99,6 +98,17 @@ the sweep files. The orchestrator corrected one line of G's text (a quiet night 
 parametrizations fail with the stale-mix assertion, and pass with it. Per the user's instruction the
 driveway footer and Ask-Claude prompt were NOT touched (concern 11, deferred to Section 9's dispatch).
 
+**Pool 10 (Section 9, first pool)** — four Sonnet workers, ~868k tokens (W1 165k, W2 191k, W3 202k,
+W4 310k), no re-dispatch, no collisions. W1: the two driveway-text fixes then 9.8 (owned `index.html`,
+`server.py`, `test_app.py`); W2: 9.1+9.2; W3: 9.3+9.7; W4: 9.5+9.6; workers 2-4 wrote only NEW
+`tests/test_verify_*.py` files and recorded product defects as `xfail(strict=True)` instead of fixing
+them. The orchestrator re-ran the full suite, re-ran the six xfails with `--runxfail` (all six fail as
+reported), and checked the real mirror was untouched (`mirror.triage_decisions` 0 rows; latest
+`sync_runs` 16 Sep). **W1 went beyond the two approved fixes**: it also made two header thesis
+sentences per-type (see concern 11), which the orchestrator judged squarely within 9.8. Workers
+noted the shared scratchpad: one deleted another's scratch tree mid-run, so give each worker its own
+subdirectory next time.
+
 ## Open concerns, carried across pools
 
 1. **5.6 and 5.5a are ticked without a browser check.** Both ask for something a human watching a
@@ -132,23 +142,11 @@ driveway footer and Ask-Claude prompt were NOT touched (concern 11, deferred to 
     `source_edit_history` in separate queries, and `derive_with_recency` reads calls, fields and census
     separately on `/doorways` and `/blocks`; the page's four HTTP fetches can never share a snapshot.
     Bears on 9.5 (compare view and export from one mirror state, so run 9.5 with the mirror quiet).
-11. **Driveway-specific text on every type's page (bears on 9.8).** The "Why blocks" footer hard-codes
-    driveway numbers on every type's page, and the Ask-Claude prompt says "blocked-driveway
-    complaints" for every type. 9.8 (no type presents blocked driveway's conclusion without its own
-    evidence) cannot pass until both are made type-specific or removed. **User decision: these two
-    text fixes are deferred, and are to be made when Section 9 is being dispatched** (as a
-    precondition to 9.8), not in the next pool. Also noted on 9.8's line in `tasks.md`.
-    **User decisions on how (after Pool 9):** (1) *Footer:* filling the driveway figures from the
-    payload would be well over 10 lines (the "7,651 of 9,791 driveway calls just say HALIFAX" count has
-    no payload source, so it needs a new per-type query, a payload field, page code and a test), so
-    **remove** the "Why blocks" `<h3>` and its two paragraphs (`index.html` ~538-545) instead. Keep the
-    rest of the `<footer>`: "The map" (type-independent) and "Read these numbers carefully" with the six
-    numbered `lim-*` limits that 7.5's bracketed links target. No test depends on the removed text.
-    (2) *Ask-Claude prompt:* use the payload's type name instead of "blocked-driveway"; keep the
-    "Enforcement has already been tried and towing does not change the recurrence rate" sentence only
-    when that type's own tow figures support it, otherwise drop it; make the measure list
-    type-neutral or drop it (the button only shows when a `sampler` capability exists). (3) Both go in
-    **the first Section 9 pool**, ahead of 9.8.
+11. ~~Driveway-specific text on every type's page~~ **Fixed in Pool 10** (footer text removed, Ask-Claude
+    prompt per-type, two header sentences per-type). Residual: two remedy-framing sentences remain on
+    every type ("a sign here alone probably will not settle it"; "Putting a sign at each of the N
+    addresses is N interventions for one problem"), judged block-vs-doorway framing, not a tow or vehicle
+    conclusion. The tow sentence is also absent in the short window before `/figures` loads.
 12. ~~Export race in Pool 9~~ done; the user's "what you did was correct" confirmed the reading.
 13. **Interpretation in 8.7's caveat:** "the only way a list leaves the application" is read as the
     served application. `src/mirror/derive.py` and `src/hotspots.py` (the 4.9/9.4 live baseline) still
@@ -166,20 +164,47 @@ driveway footer and Ask-Claude prompt were NOT touched (concern 11, deferred to 
     list a "watermark" among recorded sync outcomes; design leaves the grace period open while 7.2a set
     it from `POLL_INTERVAL`; `ROLE_OPTIONS` in the page has a third role, "Other", that spec and design
     do not name (and design M7 says the role is chosen "on entry", the spec "before recording").
+18. **9.2's four defects (held as strict xfails in `tests/test_verify_unreachable_and_overdue.py`):**
+    (A) inside the grace window the banner reads "Next update expected <past time>"; (B) the overdue banner
+    never says how long it has been overdue although the spec says it does and the API carries
+    `days_overdue`; (C) a passed estimate of HRM's next publish is shown as "estimated to next publish
+    around <past date>"; (D) a stopped sync with an old newest call reads overdue but the banner says "this
+    sync is caught up with HRM ... not a problem with this mirror" and the API's `behind_reason` blames
+    HRM's schedule (a design M4 whose-limit misstatement). All in `index.html` and `server.py`. **Fixing
+    them needs the xfail markers removed**, and closes 9.2.
+19. **9.6's changed-time defect (strict xfail in `tests/test_verify_shared_triage.py`):** `updated_at = now()`
+    is the start of the request's transaction, so a later writer whose connection opened before an
+    earlier writer's whole request can get an earlier changed-time. Worker 4 confirmed
+    `clock_timestamp()` in the upsert fixes it. Minor but real.
+20. **Roles are not enforced by the server (9.6):** any role string is accepted verbatim, a missing role is
+    stored as `unspecified`; "coordinator or parking enforcement officer" and "asked to choose a role"
+    are enforced only in the page, which also offers "Other". The page says a role "does not log you in"
+    but never says anyone with the URL can record a decision (design M7 requires the application to say
+    so). Decisions load once at boot, no polling. Spec/design/page differ; the user decides.
+21. **View-only figures (9.5):** the header "ended in a tow" and "of vehicles unique" percentages and the
+    new vehicle/neighbour sentences are in neither export, and the 4b provenance figures
+    (`call_denominators`, `response_time`, `tow.effect_bound`, `population`) are shown by neither the
+    page nor the exports, only by `/figures`. Whether that is deliberate is a spec question. Related
+    observation: the header tow % has all calls as denominator (454/9834 on the real mirror), the
+    comparison cohort is 445/9698, and the page does not name the header's denominator.
+22. **Fragile verification tests:** `test_verify_unreachable_and_overdue.py` imports helpers from
+    `tests/test_app.py` (a rename there breaks it); `test_verify_no_311_and_claims.py` scans `tests/` and
+    `docs/` for `311` (a mention outside the four exclusion-record files fails it as a reference);
+    `test_verify_view_export_agreement.py`'s node harness cuts the page script from `function vehicleThesis(`
+    to the end of the header script and stubs `pageTypeName`/`TOW_KEY` (20 tests skip with `node` off PATH).
+23. **`docs/` still says nothing of the Section 9 findings**; the handoff and `tasks.md` carry them.
 
 ## Where the work goes next
 
-Sections 1–8 are complete. What remains is **Section 9 (verification), 9.1–9.8**, whose dependencies
-are all met. Before dispatching it:
-- **Concern 11 first (user decision):** make the "Why blocks" footer and the Ask-Claude prompt
-  type-specific or remove the driveway-specific text; that is a precondition to 9.8 and is to be done
-  when Section 9 is being dispatched. It touches `web/app/index.html` (and possibly `server.py`).
-- **9.5** (board and exports agree on every count) is best run with the mirror quiet, given concern 10's
-  residual.
-- 9.4 uses the live baseline (`src/hotspots.py`), which needs network access to HRM.
-- Section 9 tasks are verification, so most are read-only or test-writing; check file ownership as
-  usual before pairing any two in a pool.
-- Open human check: no browser has ever exercised any page change (concern 1).
+Left in the change: **9.2** (blocked on concern 18) and **9.4** (verify every figure served for `Driveway`
+matches the pre-change live-source run, per 4.9; needs a live run against HRM through
+`src/hotspots.py` and `src/mirror/reconcile_figures.py`, so it needs network access and a loaded
+mirror; the local Postgres mirror is loaded, `mirror` schema, 478,458 requests).
+Suggested next pool, pending the user: **one worker for concern 18 (9.2's four defects) and concern 19
+(the changed-time race)** since both live in `index.html`/`server.py`/`schema`-adjacent code (one owner
+for those files), plus **9.4** alone in parallel as a read-mostly run against HRM with its own output
+directory and no writes to the real mirror's triage. After that the change is ready for the user to
+archive; the human browser check (concern 1) and the spec questions (concerns 17, 20, 21) are the user's.
 
 **Dispatch convention for this session (user instruction):** two tasks per sub-agent within a pool
 wherever the regions allow it, and otherwise separate sub-agents running asynchronously.
@@ -187,7 +212,7 @@ wherever the regions allow it, and otherwise separate sub-agents running asynchr
 ## Cost so far
 
 Figures below cover pools 1–5 only; pools 6 and 7 were not recorded; Pool 8 is in its History entry.
-Worker agents across five completed pools: ~1.94M tokens (17 agents); Pool 8 (~567k) and Pool 9 (~271k) are in their History entries. Pool 5 (4 agents, clean on
+Worker agents across five completed pools: ~1.94M tokens (17 agents); Pool 8 (~567k), Pool 9 (~271k) and Pool 10 (~868k) are in their History entries. Pool 5 (4 agents, clean on
 first attempt) ran ~493k tokens total, in line with Pool 4's per-agent average once you account for
 Pool 4's re-dispatch. Region-bundling (multiple tasks per agent, one region) continues to look cheaper
 than one-agent-per-task, per Pool 3's original finding.

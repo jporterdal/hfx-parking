@@ -351,10 +351,9 @@ canvas#cv{display:block;width:100%;height:100%}
   <details class="research">
   <summary>Why blocks? Read the analysis</summary>
   <p class="thesis"><span id="tow-thesis">Tow-effect comparison for this type: &hellip;</span><a class="lim" href="#lim-tow" title="Read: tow is the only recorded outcome, and the comparison is observational">[tow outcome]</a>
-  Across these addresses <b><span id="distinct-count">&hellip;</span> of <span id="seen-count">&hellip;</span> recorded vehicles were different cars</b><a class="lim" href="#lim-vehicle" title="Read: vehicle identity is a floor, not a plate">[vehicle id]</a>. There is no repeat offender to
-  deter, so the street is producing the violation. And <b><span id="with-neighbour-count">&hellip;</span> of the <span id="n-doorways-thesis">&hellip;</span> doorways sit on a block where a neighbour is
-  also still calling</b><a class="lim" href="#lim-address" title="Read: addresses are matched as text, not geocoded">[addresses]</a><a class="lim" href="#lim-block-label" title="Read: a block's street label is derived, not official">[block label]</a>, which means most of these are not a sign at one address. They are one block-wide problem
-  counted many times.<a class="lim" href="#lim-dwelling" title="Read: the dwelling rate covers the whole block">[dwelling rate]</a></p>
+  Across these addresses <b><span id="distinct-count">&hellip;</span> of <span id="seen-count">&hellip;</span> recorded vehicles were different cars</b><a class="lim" href="#lim-vehicle" title="Read: vehicle identity is a floor, not a plate">[vehicle id]</a>. <span id="vehicle-thesis"></span>
+  And <b><span id="with-neighbour-count">&hellip;</span> of the <span id="n-doorways-thesis">&hellip;</span> doorways sit on a block where a neighbour is
+  also still calling</b><a class="lim" href="#lim-address" title="Read: addresses are matched as text, not geocoded">[addresses]</a><a class="lim" href="#lim-block-label" title="Read: a block's street label is derived, not official">[block label]</a><span id="neighbour-thesis"></span><a class="lim" href="#lim-dwelling" title="Read: the dwelling rate covers the whole block">[dwelling rate]</a></p>
   </details>
   </div>
   <div class="stats">
@@ -535,14 +534,15 @@ canvas#cv{display:block;width:100%;height:100%}
 </div>
 
 <footer>
-  <h3>Why blocks</h3>
-  <p>One doorway calling on its own wants a bollard or a driveway marking. A block where nine doorways are all still
-  calling is one problem, not nine, and nine signs is the wrong answer to it. Blocks here are HRM's Census 2021
-  Dissemination Areas, which carry a dwelling count, so a block's load is shown per 1,000 dwellings as well as raw.
-  Dense blocks call more; the rate is what separates a real problem from a lot of front doors.</p>
-  <p>Three coarser groupings were tried and thrown out. The <em>community</em> field on the call record is useless:
-  7,651 of 9,791 driveway calls just say HALIFAX. HRM's Community Boundaries layer fails the same way. Community Plan
-  Areas has only 22 polygons for the whole municipality.</p>
+  <!-- The footer used to open with a heading and two paragraphs of figures
+       measured on one violation type alone (a remedy for a single doorway,
+       a count of calls with an uninformative community field, three coarser
+       groupings tried and rejected). This one file serves every tracked type,
+       so they read as a finding about whichever type was being viewed.
+       Removed (task 9.8: no type presents blocked driveway's conclusion
+       without its own evidence). The type-aware analysis lives in the
+       header's "Why blocks? Read the analysis" panel, filled from the
+       payload. -->
   <h3>The map</h3>
   <p>Drawn from HRM's own Street Network layer, 10,599 street segments, and from the census block outlines. It is
   vector, not tiles, so it works with no external service and zooms without pixelating. Street names appear as you
@@ -681,6 +681,15 @@ const ROWS = DATA.rows, BLOCKS = DATA.blocks;
  * combination lists nothing, and to state the window's length and anchor on
  * every list, not only the empty case. */
 const FILTERS = doorPayload.filters || {};
+/* Task 9.8: the two per-type facts the Ask-Claude prompt and the thesis
+ * sentences must come from, each with exactly one source -- the type the
+ * server says these rows belong to (also what #type-name and the document
+ * title show), and this type's own stored tow-comparison conclusion key
+ * (`figures.tow.conclusion_key`, set once by the tow-thesis IIFE below; null
+ * until that fetch lands or if it fails, which every reader treats as "no
+ * conclusion to state"). */
+const pageTypeName = () => doorPayload.type || blockPayload.type || "";
+let TOW_KEY = null;
 
 /* Task 5.2: the type switcher. /api/types is fetched above alongside the
  * type-scoped data (not gated behind it) so a slow /api/types never delays
@@ -867,9 +876,35 @@ const FILTERS = doorPayload.filters || {};
  * stored yet for the mirror's current version) is reported as "not yet
  * available" with the server's own stated reason, never computed here as a
  * fallback. */
+/* Task 9.8 (D19): the two sentences that used to follow the tow sentence as
+ * fixed text on every type's page -- "There is no repeat offender to deter, so
+ * the street is producing the violation" and "which means most of these are
+ * not a sign at one address" -- were blocked driveway's conclusions, stated
+ * whatever the type's own numbers were. Each is now chosen from this type's
+ * own figures (`vehicleThesis`: its stored `vehicles.conclusion_key`;
+ * `neighbourThesis`: its own with-a-calling-neighbour count against its own
+ * doorway count) and is blank until they are known, so no claim shows before
+ * the evidence for it does. Pure, so each is exercised on its own. */
+function vehicleThesis(vehicles){
+  const v = vehicles || {};
+  if (v.conclusion_key === "mostly_distinct")
+    return "There is no repeat offender to deter, so the street is producing the violation.";
+  if (!v.conclusion) return "The vehicle-uniqueness conclusion for this type is not yet available.";
+  return `${v.conclusion.charAt(0).toUpperCase()}${v.conclusion.slice(1)}.`;
+}
+function neighbourThesis(withNeighbour, count){
+  if (!count) return "";
+  if (withNeighbour * 2 > count)
+    return ", which means most of these are not a sign at one address. They are one block-wide problem counted many times.";
+  if (withNeighbour * 2 < count)
+    return ", which means most of these doorways are on their own rather than part of a block-wide problem.";
+  return ", which means these doorways split evenly between block-wide and single-address problems.";
+}
 (async () => {
   const towThesis = document.getElementById("tow-thesis");
   if (!towThesis) return;
+  const vehicleEl = document.getElementById("vehicle-thesis");
+  const setVehicle = text => { if (vehicleEl) vehicleEl.textContent = text; };
   const notYetAvailable = reason =>
     "Tow-effect comparison for this type is not yet available"
     + (reason ? ` (${reason}).` : ".");
@@ -880,9 +915,12 @@ const FILTERS = doorPayload.filters || {};
     const payload = await resp.json();
     if (!payload.available){
       towThesis.textContent = notYetAvailable(payload.reason);
+      setVehicle(vehicleThesis(null));
       return;
     }
     const tow = (payload.figures || {}).tow || {};
+    TOW_KEY = tow.conclusion_key || null;
+    setVehicle(vehicleThesis((payload.figures || {}).vehicles));
     if (!tow.conclusion){
       towThesis.textContent = notYetAvailable("no stored conclusion for the tow comparison");
       return;
@@ -898,6 +936,7 @@ const FILTERS = doorPayload.filters || {};
   }catch(e){
     console.error("could not load type figures", e);
     towThesis.textContent = notYetAvailable(null);
+    setVehicle(vehicleThesis(null));
   }
 })();
 
@@ -912,7 +951,7 @@ const FILTERS = doorPayload.filters || {};
    * `doorPayload.type` (what the server says these rows are rows of), not
    * from the URL or a hard-coded default, so a screenshot, a saved page or a
    * browser tab strip names the type without cross-referencing an address. */
-  const typeName = doorPayload.type || blockPayload.type || "";
+  const typeName = pageTypeName();
   set("type-name", typeName || "unknown");
   set("list-type", typeName ? `Violation type: ${typeName}` : "");
   if (typeName) document.title = `${typeName} · ${document.title}`;
@@ -923,6 +962,7 @@ const FILTERS = doorPayload.filters || {};
   set("distinct-count", (s.distinct ?? 0).toLocaleString());
   set("seen-count", (s.seen ?? 0).toLocaleString());
   set("with-neighbour-count", (s.with_neighbour ?? 0).toLocaleString());
+  set("neighbour-thesis", neighbourThesis(s.with_neighbour ?? 0, doorPayload.count));
   set("tow-pct-stat", s.tow_pct == null ? "-" : `${s.tow_pct.toFixed(1)}%`);
   set("unique-pct-stat", s.unique_pct == null ? "-" : `${s.unique_pct}%`);
 })();
@@ -1738,6 +1778,42 @@ el("sort").onchange = e => { f.sort = e.target.value; render(); };
 el("q").oninput = e => { f.q = e.target.value.trim().toLowerCase(); render(); };
 
 /* ---------- ask Claude ---------- */
+/* Task 9.8 (D19): the prompt is built from *this* type's own data, never from
+ * blocked driveway's. `typeName` is the payload's type (pageTypeName(), the
+ * same value #type-name shows); `towKey` is this type's own stored
+ * `figures.tow.conclusion_key` (TOW_KEY, set by the tow-thesis IIFE above).
+ * The enforcement sentence ("... towing does not change the recurrence rate")
+ * is a *finding*, so it is included only when this type's own tow comparison
+ * found `no_difference`; for `tow_lower`, `tow_higher`, `sample_too_small`, or
+ * while the figures have not loaded (null), it is left out rather than
+ * asserted. No list of remedies is offered either: which measure fits is
+ * exactly what the reader is asking Claude, and any fixed list is one type's
+ * remedy set. Pure (no DOM, no fetch), so it can be exercised on its own. */
+function buildAskPrompt(typeName, it, isBlock, towKey){
+  const kind = typeName
+    ? `complaints of the type "${typeName}"`
+    : "complaints of this violation type";
+  const facts = isBlock
+    ? `A city block in Halifax, Nova Scotia, around ${it.s}, council district ${it.d}.\n`
+      + `${it.n} separate doorways on this block generated ${it.m} ${kind} in the last 12 months, ${it.t} since 2020.\n`
+      + `The block has ${it.dw} dwellings. Tows recorded across the whole block: ${it.w}.`
+    : `${it.a}, ${it.c}, Halifax council district ${it.d}.\n`
+      + `Number of ${kind}: ${it.m} in the last 12 months, ${it.t} since 2020.\n`
+      + `Vehicles recorded: ${it.vd} distinct out of ${it.vs} calls that recorded one.\n`
+      + `Tows: ${it.w}. Median days between calls: ${it.g==null?"unknown":it.g}. Last call: ${it.l}.\n`
+      + `Other doorways on the same block still calling: ${it.nb - 1}.`;
+  const ask = isBlock
+    ? `Name the block-wide measure most likely to stop these calls, `
+      + `say what to check on the ground first, and name the single biggest reason your suggestion could be wrong.`
+    : `Name the measure most likely to stop these calls, say what a site visit should check first, `
+      + `and name the single biggest reason your suggestion could be wrong.`;
+  const enforcement = towKey === "no_difference"
+    ? "Enforcement has already been tried and towing does not change the recurrence rate. "
+    : "";
+  return `You advise a municipal traffic operations team in Halifax, Nova Scotia.\n\n${facts}\n\n`
+    + `${enforcement}${ask} `
+    + `Three or four sentences. Do not repeat the numbers back. Plain sentences, no headings, no lists.`;
+}
 function setupAsk(d, it, isBlock){
   const btn = d.querySelector("[data-ask]"), box = d.querySelector(".advice");
   if (!sampler) return;
@@ -1745,27 +1821,9 @@ function setupAsk(d, it, isBlock){
   btn.onclick = async e => {
     e.stopPropagation();
     btn.disabled = true; box.hidden = false; box.textContent = "Thinking\u2026";
-    const facts = isBlock
-      ? `A city block in Halifax, Nova Scotia, around ${it.s}, council district ${it.d}.\n`
-        + `${it.n} separate driveways on this block generated ${it.m} blocked-driveway complaints in the last 12 months, ${it.t} since 2020.\n`
-        + `The block has ${it.dw} dwellings. Tows recorded across the whole block: ${it.w}.`
-      : `${it.a}, ${it.c}, Halifax council district ${it.d}.\n`
-        + `Blocked-driveway complaints: ${it.m} in the last 12 months, ${it.t} since 2020.\n`
-        + `Vehicles recorded: ${it.vd} distinct out of ${it.vs} calls that recorded one.\n`
-        + `Tows: ${it.w}. Median days between calls: ${it.g==null?"unknown":it.g}. Last call: ${it.l}.\n`
-        + `Other doorways on the same block still calling: ${it.nb - 1}.`;
-    const ask = isBlock
-      ? `Name the block-wide measure most likely to stop these calls (a residential parking permit zone, `
-        + `curb management and time limits, daylighting the corners, a parking study, or a curb extension), `
-        + `say what to check on the ground first, and name the single biggest reason your suggestion could be wrong.`
-      : `Name the physical measure most likely to stop these calls (a driveway marking, a no-parking sign, `
-        + `a bollard or flex post, curb paint, or a curb extension), say what a site visit should check first, `
-        + `and name the single biggest reason your suggestion could be wrong.`;
     try{
       const out = await sampler(
-        `You advise a municipal traffic operations team in Halifax, Nova Scotia.\n\n${facts}\n\n`
-        + `Enforcement has already been tried and towing does not change the recurrence rate. ${ask} `
-        + `Three or four sentences. Do not repeat the numbers back. Plain sentences, no headings, no lists.`,
+        buildAskPrompt(pageTypeName(), it, isBlock, TOW_KEY),
         {modelTier:"default", onText:({text}) => { box.textContent = text; }});
       box.textContent = out.text;
     }catch(err){
