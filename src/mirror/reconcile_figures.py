@@ -108,8 +108,8 @@ BRIEF_FILES = ("watchlist.md", "blocks.md")
 
 def run_live(out_dir, violation=VIOLATION, extra_args=()):
     """Run `src/hotspots.py` against the live HRM service, writing its four outputs
-    (plus a board, unused -- see `BOARD_STATUS`) into `out_dir`. Takes about 3.5
-    minutes per `design.md`'s measurement. Returns the completed `subprocess.run`.
+    into `out_dir`. Takes about 3.5 minutes per `design.md`'s measurement. Returns
+    the completed `subprocess.run`.
     """
     out_dir = pathlib.Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -120,7 +120,6 @@ def run_live(out_dir, violation=VIOLATION, extra_args=()):
         "--brief", str(out_dir / "watchlist.md"),
         "--block-csv", str(out_dir / "blocks.csv"),
         "--block-brief", str(out_dir / "blocks.md"),
-        "--board", str(out_dir / "triage-board.html"),
         *extra_args,
     ]
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)

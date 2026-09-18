@@ -320,6 +320,9 @@ _UNTRACKED_TYPE_PAGE = """<!doctype html>
 </head>
 <body>
 <h1>&ldquo;{{ slug }}&rdquo; is not a tracked type</h1>
+<p><strong>This page covers no violation type.</strong> It lists no doorways or
+blocks, and nothing on it describes any one type -- the tracked types named
+below are links, not the subject of this page.</p>
 <p>This application only lists doorways and blocks for the canonical violation
 types it tracks (<code>violation_types.CANONICAL_TYPES</code>). That slug is
 not one of them -- it may name a real HRM label this codebase has not frozen,
@@ -932,16 +935,23 @@ _BLOCK_CSV_COLUMNS = [
 ]
 
 
-def _write_csv_table(writer, columns, payload_rows):
+def _write_csv_table(writer, columns, payload_rows, type_name):
     """One section of the CSV export: a header row of readable column names,
     then one row per item in `payload_rows` (already `_doorway_payload`/
-    `_block_payload`-shaped)."""
-    writer.writerow([label for _, label in columns])
+    `_block_payload`-shaped).
+
+    Task 7.7a: a final "Violation Type" column repeats `type_name` on every
+    row. The preamble already names the type once, but a table copied out of
+    the file (into a spreadsheet already holding another type's rows, say)
+    leaves the preamble behind -- and the download's filename is not part of
+    the content -- so each row states the type it belongs to itself.
+    """
+    writer.writerow([label for _, label in columns] + ["Violation Type"])
     for row in payload_rows:
         writer.writerow([
             "; ".join(row[key]) if key == "addrs" else row.get(key)
             for key, _ in columns
-        ])
+        ] + [type_name])
 
 
 def _export_csv_text(canonical, slug, filters, result, freshness_data, figures_result):
@@ -1012,10 +1022,10 @@ def _export_csv_text(canonical, slug, filters, result, freshness_data, figures_r
     w.writerow([])
 
     w.writerow(["DOORWAYS"])
-    _write_csv_table(w, _DOORWAY_CSV_COLUMNS, _doorway_payload(result["rows"]))
+    _write_csv_table(w, _DOORWAY_CSV_COLUMNS, _doorway_payload(result["rows"]), canonical)
     w.writerow([])
     w.writerow(["BLOCKS"])
-    _write_csv_table(w, _BLOCK_CSV_COLUMNS, _block_payload(result["blocks"]))
+    _write_csv_table(w, _BLOCK_CSV_COLUMNS, _block_payload(result["blocks"]), canonical)
 
     return buf.getvalue()
 
@@ -1080,11 +1090,15 @@ _EXPORT_BRIEF_TEMPLATE = """<!doctype html>
 {% for limit in limits %}  <li id="{{ limit.id }}"><b>{{ limit.title }}</b> {{ limit.text }}</li>
 {% endfor %}</ol>
 
+{# Task 7.8: a value the view lacks (a null median gap, calls-per-1k rate, ...)
+   is an en dash here -- the page's own convention -- and an empty cell in the
+   CSV; never Jinja's default rendering of None, the word "None". #}
 <h2>Doorways ({{ doorway_count }})</h2>
 {% if doorways %}
 <table>
+<caption>{{ type }} - doorways</caption>
 <tr>{% for _, label in doorway_columns %}<th>{{ label }}</th>{% endfor %}</tr>
-{% for row in doorways %}<tr>{% for key, _ in doorway_columns %}<td>{{ row[key]|join("; ") if key == "addrs" else row[key] }}</td>{% endfor %}</tr>
+{% for row in doorways %}<tr>{% for key, _ in doorway_columns %}<td>{{ row[key]|join("; ") if key == "addrs" else ("&ndash;"|safe if row[key] is none else row[key]) }}</td>{% endfor %}</tr>
 {% endfor %}</table>
 {% else %}
 <p>No doorways match {{ filter_summary_sentence }}.</p>
@@ -1093,8 +1107,9 @@ _EXPORT_BRIEF_TEMPLATE = """<!doctype html>
 <h2>Blocks ({{ block_count }})</h2>
 {% if blocks %}
 <table>
+<caption>{{ type }} - blocks</caption>
 <tr>{% for _, label in block_columns %}<th>{{ label }}</th>{% endfor %}</tr>
-{% for row in blocks %}<tr>{% for key, _ in block_columns %}<td>{{ row[key]|join("; ") if key == "addrs" else row[key] }}</td>{% endfor %}</tr>
+{% for row in blocks %}<tr>{% for key, _ in block_columns %}<td>{{ row[key]|join("; ") if key == "addrs" else ("&ndash;"|safe if row[key] is none else row[key]) }}</td>{% endfor %}</tr>
 {% endfor %}</table>
 {% else %}
 <p>No blocks match {{ filter_summary_sentence }}.</p>

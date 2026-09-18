@@ -223,6 +223,12 @@ canvas#cv{display:block;width:100%;height:100%}
     white-space:nowrap;margin-right:6px}
   .lim:hover,.lim:focus-visible{color:var(--accent);border-color:var(--accent)}
   .stat .lim{display:block;margin:4px 0 0}
+  .list-limits{margin:0 0 8px;font-size:12px;color:var(--muted)}
+  .list-limits .lim{margin-left:4px}
+  /* Follow-up to 7.7: the export link line (see #list-exports' comment). */
+  .list-exports{margin:0 0 8px;font-size:13px;color:var(--muted)}
+  .list-exports a{color:var(--accent);margin-right:14px;text-underline-offset:2px}
+  .list-exports .export-note{font-size:12px}
   .limits{margin:10px 0 0;padding-left:1.3em}
   .limits li{margin:0 0 8px;max-width:70ch}
   .limits li:target{background:var(--accent-soft);border-radius:3px;
@@ -327,7 +333,12 @@ canvas#cv{display:block;width:100%;height:100%}
 <div class="hazard"></div>
 <div class="wrap">
 <header>
-  <p class="eyebrow">Halifax Regional Municipality &middot; blocked driveway service requests &middot; open data to <span id="latest-date">&hellip;</span></p>
+  <!-- Task 7.7a: the violation type this page covers, named in the served
+       content itself and filled from the type the server says the rows
+       belong to (doorPayload.type -- see the "Header figures" IIFE below),
+       not hard-coded: this same file serves every tracked type, so a fixed
+       "blocked driveway" here would name the wrong type on 29 of 30 routes. -->
+  <p class="eyebrow">Halifax Regional Municipality &middot; violation type: <span id="type-name">&hellip;</span> &middot; open data to <span id="latest-date">&hellip;</span></p>
   <!-- Tasks 7.1/7.3/7.4a: the mirror's own freshness, dated rather than
        asserted -- see the boot() fetch of /api/freshness below, which fills
        this in and adds .stale if the newest call the mirror holds is
@@ -458,6 +469,11 @@ canvas#cv{display:block;width:100%;height:100%}
 
 <section class="table-panel" aria-label="Triage results">
   <div class="table-tools">
+    <!-- Task 7.7a: the list itself names its type, so a doorway/block list
+         copied or screenshotted away from the page header still says which
+         canonical type it is a list of. Filled once at boot from
+         doorPayload.type (the "Header figures" IIFE below). -->
+    <span class="count" id="list-type"></span>
     <span class="count" id="showing" aria-live="polite"></span>
     <!-- Task 7.4: the recency window's length and anchor date, on every
          filtered list -- not just when a viewer has touched the toolbar,
@@ -480,6 +496,37 @@ canvas#cv{display:block;width:100%;height:100%}
     <span class="count" id="filters-note"></span>
     <label for="sort">Sort by <select id="sort" aria-label="Sort the list"></select></label>
   </div>
+  <!-- Follow-up to 7.7 (export a type's lists): the two routes that landed
+       there, GET /api/types/<slug>/export.csv (complete table) and GET
+       /types/<slug>/export (readable brief), linked from the list they export.
+       Real anchors, deliberately outside the result rows (each row is a
+       <button>; a link inside one is invalid and unreliable) and outside
+       #list-limits (which heads() hides in doorway mode -- the exports cover
+       doorways and blocks both, so this line shows in either mode). No href in
+       the markup: syncExportLinks() (in boot(), called from every render())
+       sets both from SLUG and the filter values, through the same
+       filterQueryFrom() the data fetches use, so a link can never point at an
+       unfiltered file while the list on screen is filtered. Hidden until then,
+       so a failed load never leaves a link without a target. This file is only
+       served for tracked types (server.py's _untracked_type_page is a separate
+       template), so there is no untracked case to handle here. -->
+  <p class="list-exports" id="list-exports" hidden>
+    <a id="export-csv" download>Download this list (CSV)</a>
+    <a id="export-brief">Read this list as a brief</a>
+    <span class="export-note">Both cover the list as currently filtered by the filters above (not the search box or status tabs).</span>
+  </p>
+  <!-- Follow-up to 7.5: the block list's own derived-label and block-wide
+       dwelling-rate footnote links (same markup and same #lim-block-label /
+       #lim-dwelling targets as the header stats). Deliberately not inside the
+       result rows: each row is a <button> (its onclick selects/opens it), and a
+       link nested in a button is invalid HTML, is not reliably focusable or
+       clickable across browsers, and would compete with row selection. This
+       line sits directly above the column headings the two figures live under,
+       is not part of .rhead (so it survives the narrow layout that hides
+       .rhead), and heads() shows it only in block mode -- the doorway list
+       shows neither figure. The detail panel carries its own in-sentence links
+       (evidenceBlock()). -->
+  <p class="list-limits" id="list-limits">Block street names are a derived label<a class="lim" href="#lim-block-label" title="Read: a block's street label is derived, not official">[block label]</a>; the dwellings count and the per-1k rate cover the whole census block<a class="lim" href="#lim-dwelling" title="Read: the dwelling rate covers the whole block">[dwelling rate]</a>.</p>
 <div class="rows">
   <div class="rhead" id="rhead"></div>
   <div id="list"></div>
@@ -569,16 +616,35 @@ const SLUG = (location.pathname.match(/^\/types\/([a-z0-9-]+)\/?$/) || [null, DE
  * switch's) actually changes what the server returns, not only what this
  * page displays. */
 const FILTER_PARAM_NAMES = ["district", "min_calls", "min_doorways", "recur_days", "recency_days"];
-const FILTER_QUERY = (() => {
-  const src = new URLSearchParams(location.search);
+/* The one place a filter query string is built: `get(name)` returns a
+ * filter's value (or null/undefined/blank for "not set"), and only the five
+ * `FILTER_PARAM_NAMES` are ever emitted. `FILTER_QUERY` (the data fetches) and
+ * `exportHrefs()` (the export link, follow-up to 7.7) both go through it, so
+ * the file a viewer downloads is asked for with exactly the parameters the
+ * list they are looking at was. */
+function filterQueryFrom(get){
   const out = new URLSearchParams();
   for (const name of FILTER_PARAM_NAMES){
-    const v = src.get(name);
-    if (v !== null && v.trim() !== "") out.set(name, v);
+    const v = get(name);
+    if (v !== null && v !== undefined && String(v).trim() !== "") out.set(name, String(v));
   }
   const s = out.toString();
   return s ? `?${s}` : "";
+}
+const FILTER_QUERY = (() => {
+  const src = new URLSearchParams(location.search);
+  return filterQueryFrom(name => src.get(name));
 })();
+
+/* Follow-up to 7.7: the export routes' URLs for one type and one set of
+ * filter values -- `GET /api/types/<slug>/export.csv` (complete table) and
+ * `GET /types/<slug>/export` (readable brief), both of which read the same
+ * five parameters `_filters_from_request` gives the list routes. Pure (no
+ * DOM, no globals beyond FILTER_PARAM_NAMES) so it can be exercised alone. */
+function exportHrefs(slug, get){
+  const q = filterQueryFrom(get);
+  return {csv: `/api/types/${slug}/export.csv${q}`, brief: `/types/${slug}/export${q}`};
+}
 
 async function boot(){
 const banner = document.getElementById("dbstate");
@@ -840,6 +906,15 @@ const FILTERS = doorPayload.filters || {};
 (() => {
   const s = doorPayload.summary || {};
   const set = (id, val) => { const n = document.getElementById(id); if (n) n.textContent = val; };
+  /* Task 7.7a: the canonical type this view covers, stated in the page's own
+   * content -- the eyebrow, the list heading and the document title -- from
+   * `doorPayload.type` (what the server says these rows are rows of), not
+   * from the URL or a hard-coded default, so a screenshot, a saved page or a
+   * browser tab strip names the type without cross-referencing an address. */
+  const typeName = doorPayload.type || blockPayload.type || "";
+  set("type-name", typeName || "unknown");
+  set("list-type", typeName ? `Violation type: ${typeName}` : "");
+  if (typeName) document.title = `${typeName} · ${document.title}`;
   set("latest-date", doorPayload.latest || "unknown");
   set("n-doorways-thesis", doorPayload.count.toLocaleString());
   set("n-doorways-stat", doorPayload.count.toLocaleString());
@@ -1217,6 +1292,9 @@ const visibleSet = () => new Set(items().map(i => i.key));
 
 function heads(){
   el("rhead").className = "rhead" + (mode === "block" ? " blockrow" : "");
+  // The derived-label and block-wide dwelling-rate footnotes only bear on the
+  // block list's figures (see #list-limits' comment).
+  const listLimits = el("list-limits"); if (listLimits) listLimits.hidden = mode !== "block";
   el("rhead").innerHTML = mode === "block"
     ? `<div>Streets on the block</div><div class="num">Doorways</div><div class="num">Calls 12mo</div>
        <div class="num">All</div><div class="num">Tows</div><div class="num">Dwellings</div>
@@ -1290,7 +1368,28 @@ function activeFilterSummary(){
   return activeFilterBits().join(", ");
 }
 
+/* Follow-up to 7.7: point #export-csv and #export-brief at this view's own
+ * export URLs. The filter values are the ones the list on screen was computed
+ * from -- the query string this page was loaded with, the same source
+ * FILTER_QUERY reads for the data fetches -- except district, which the
+ * toolbar's District select changes on screen at once (client-side, no
+ * reload; `f.district`), so a live pick wins over the loaded one. "Apply
+ * filters" reloads the page at a new query string, which re-runs boot() and so
+ * this; the District select and "Clear filters" reach it through render(),
+ * which calls it every time. The search box and status tabs are client-side
+ * views of the list, not filters the export routes take, and are not sent. */
+function syncExportLinks(){
+  const box = el("list-exports");
+  if (!box) return;
+  const loaded = new URLSearchParams(location.search);
+  const h = exportHrefs(SLUG, name => name === "district" && f.district ? f.district : loaded.get(name));
+  el("export-csv").href = h.csv;
+  el("export-brief").href = h.brief;
+  box.hidden = false;
+}
+
 function render(){
+  syncExportLinks();
   el("clear-filters").hidden = !(f.district || f.status !== "all" || f.q);
   const v = items(), V = VOCAB();
   const total = mode === "block" ? BLOCKS.length : ROWS.length;
@@ -1397,10 +1496,20 @@ function evidenceDoor(r){
   if (r.o === "PRIVATE") tail += " Recorded on private property, so the fix may not be HRM's to make.";
   return bits.join(". ") + "." + tail;
 }
+/* Follow-up to 7.5: the same two footnote links the header stats carry
+ * (identical markup, identical #lim-block-label / #lim-dwelling targets),
+ * beside the derived block label and the dwelling rate in the detail panel.
+ * The detail panel is a sibling of the row <button>, not a child of it (see
+ * render()), and has no click handler of its own -- only its status/address/
+ * ask buttons stop propagation -- so a click on one of these links is an
+ * ordinary in-page hash navigation that never reaches, or is swallowed by,
+ * row selection. */
+const LIM_BLOCK_LABEL = `<a class="lim" href="#lim-block-label" title="Read: a block's street label is derived, not official">[block label]</a>`;
+const LIM_DWELLING = `<a class="lim" href="#lim-dwelling" title="Read: the dwelling rate covers the whole block">[dwelling rate]</a>`;
 function evidenceBlock(b){
-  const rate = b.r == null ? "" : ` That is <b>${b.r.toFixed(1)} calls per 1,000 dwellings</b>, against ${b.dw.toLocaleString()} dwellings on the block.`;
+  const rate = b.r == null ? "" : ` That is <b>${b.r.toFixed(1)} calls per 1,000 dwellings</b>, against ${b.dw.toLocaleString()} dwellings on the block.${LIM_DWELLING}`;
   const tows = b.w === 0 ? "Not one vehicle has been towed on this block." : `<b>${b.w}</b> tow${b.w===1?"":"s"} across the block.`;
-  return `<b>${b.n}</b> separate doorways here are still calling, <b>${b.m}</b> calls between them in the last 12 months `
+  return `On <b>${b.s}</b>${LIM_BLOCK_LABEL}, <b>${b.n}</b> separate doorways here are still calling, <b>${b.m}</b> calls between them in the last 12 months `
        + `and <b>${b.t}</b> since 2020.${rate} ${tows} `
        + `Putting a sign at each of the ${b.n} addresses is ${b.n} interventions for one problem.`;
 }

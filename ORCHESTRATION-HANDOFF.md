@@ -12,7 +12,7 @@ Verify before trusting anything below — an agent's report is a claim, not evid
 ```bash
 git status --short          # whose files changed
 git diff                    # what actually landed vs. what was claimed
-python -m pytest -q         # 481 passing as of 9fe0d7d
+python -m pytest -q         # 527 tests as of the Pool 8 checkpoint, all passing
 openspec validate mirror-hrm-data-and-host-app --strict
 ```
 
@@ -22,17 +22,18 @@ something nobody verified. This happened once already in this change (see "Histo
 
 ## State at last commit
 
-`9fe0d7d` — the last checkpoint. 481 tests passing, `openspec validate --strict` clean (both run
-against the working tree just before it was committed).
+The **Pool 8 checkpoint** (`git log -1`; its parent is `c5c8271`, plus the doc-only `b04731c`).
+527 tests, all passing; `openspec validate --strict` clean, both run on the working tree just
+before committing.
 
-Complete through: sections 1–4 entirely, 5.1–5.8 entirely (incl. 5.5a–5.5e), 6.1–6.7 entirely,
-7.1–7.7 entirely (7.2a and 5.5d landed in `d1b8b5f`; 7.2b and 7.7 landed in `9fe0d7d`), 8.1 (partial,
-see its note), 8.1a, 8.2, 8.3, 8.6, 8.8.
+Complete through: sections 1–4 entirely, 5.1–5.8, 6.1–6.7, 7.1–7.8 entirely, 8.1 (partial, see its
+note), 8.1a, 8.2, 8.3, 8.4, 8.6, 8.7, 8.8. **Not done:** 8.5 (decisions narrative — now unblocked),
+8.9 (stale-reference sweep, added this pool) and all of section 9. Several completed tasks carry
+caveats in their `tasks.md` lines (7.7, 7.8, 8.4, 8.7 especially); read them before treating a task
+as fully closed.
 
-**7.2b and 7.7 were ticked on the user's word**, not re-verified by the orchestrator: they were
-written by a pool whose orchestrator session ended before it verified, ticked or committed, leaving
-the work uncommitted in the tree. The user confirmed another agent had verified both. The
-orchestrator only confirmed pytest and `openspec validate` were green before committing.
+**7.2b and 7.7 were ticked on the user's word** (another agent had verified them; the orchestrator
+only confirmed pytest and `openspec validate` were green) — see Pool 7 under History.
 
 ## Conventions these pools run under
 
@@ -48,10 +49,10 @@ orchestrator only confirmed pytest and `openspec validate` were green before com
   each edit, and report any Edit that failed because an anchor had moved. Region boundaries have held
   across two pools (8 agents) with zero real collisions — the header banner / toolbar+results /
   header-intro+footer-narrative / README split works well as a default four-way cut.
-- **M5 scope rule.** `web/template.html` and the committed `out/` files are deprecated and
-  unreachable from the served application. Their figures and claims are **out of scope to correct**;
-  a task naming a stale claim is satisfied by fixing the served page. Every worker is told this,
-  because both files hold near-identical copies of the served page's defects.
+- **M5 scope rule (now historical).** `web/template.html` and the committed `out/` files were
+  deprecated and unreachable from the served application, so their figures were out of scope to
+  correct. Both were deleted in Pool 8; the last commit containing them is `b04731c`
+  (`git show b04731c:web/template.html`), recorded in `README.md` and `docs/index.md`.
 - **Task notes.** When a task is completed partially, or with a caveat, the caveat is appended to
   its line in `tasks.md` rather than left in a commit message. Several completed tasks carry these;
   read them before assuming a task is fully closed.
@@ -81,12 +82,24 @@ next session found it as an uncommitted +1,073/−15 diff across `server.py`, `t
 `index.html` and this handoff still describing `ab0c1fa`. Lesson: **update this file at every
 checkpoint, in the same commit or the one straight after**, not later.
 
+**Pool 8** (7.7a, 7.8 + the 7.5 footnote-link follow-up; 8.4, 8.7; then the export link and the
+`out/` deletion) — four workers, all on Sonnet, ~567k tokens (A 230k, B 162k, E 101k, F 73k), no
+re-dispatch. Split by file: A owned `server.py`/`test_app.py`/`index.html`; B owned README, docs and
+`hotspots.py`. The user resolved M12 (retire `web/template.html`), asked for the `out/` files to be
+deleted too, and for the export link to be added to the page. Two follow-on workers (E: export link;
+F: `out/` deletion and `--board` removal) ran in parallel on disjoint files. Two tasks per worker was
+used where regions allowed (A: 7.7a+7.8+footnote links; B: 8.4+8.7); E and F each held one or two.
+The user directed the stale-reference sweep and the `reconcile_figures` cleanup to be handled as a
+later task (8.9) or one-off; the `--board` removal was done as a one-off here.
+
 ## Open concerns, carried across pools
 
 1. **5.6 and 5.5a are ticked without a browser check.** Both ask for something a human watching a
    live page would confirm (a colour-scheme toggle; the toolbar's Apply-filters button). No browser
    exists in the agent environment; verification was code-level / over raw HTTP. Needs a human doing
-   the actual interaction once, in a live app, to fully close either out.
+   the actual interaction once, in a live app, to fully close either out. **The same is true of every
+   Pool 8 page change** (type naming, footnote links, the export link and its href updates on filter
+   changes); the export-link worker exercised the href logic in node with stubs only.
 2. **7.6's explanation is hover-only** — `title` attributes, invisible on touch and to keyboard users,
    column hidden below 860px. Not failed (substantive framing is in the detail panel), just thinner
    than it looks. 7.5's agent explicitly chose a visible, focusable link instead for the same reason,
@@ -98,54 +111,60 @@ checkpoint, in the same commit or the one straight after**, not later.
    one task, not fixed.
 5. **5.2's design choices were the agent's own** — path routing (`/types/<slug>`) plus a full-page
    `<select>`. Defensible, unspecified, and 7.7 will build exports around it.
-6. **M12 leaves a decision open, and it now blocks 8.7**: whether `web/template.html` is folded back
-   into the served page or stays a separate file (`design.md` M12 says the change "does not make" it
-   and that it "needs one"). It decides whether 8.7 deletes the template and `write_board()` or keeps
-   `hotspots.py`'s standalone board as an artefact. `src/app/server.py` imports functions from
-   `hotspots.py`, so the module itself stays either way; only its `main()` and the `out/` outputs are
-   in question. **Resolved by the user:** retire `web/template.html` once its functionality is confirmed
-   present in the served page, and record in the docs the last commit that still contains it. 8.7 is
-   released; see the pool notes below.
-7. **7.5's dwelling-rate/block-label footnotes only reach the header stats**, not the actual figures
-   in the results list/detail panel (`evidenceBlock()`) — that region belonged to a different agent
-   this pool. A follow-up should add the same `#lim-dwelling`/`#lim-block-label` links there.
-8. **8.2's fix sits awkwardly next to the still-uncorrected "Open the board" paragraph** above it in
-   `README.md` (double-click/browser-local-storage instructions, left alone per M5) — no factual
-   error in either sentence, but the sequencing reads oddly until 8.4 replaces the preceding paragraph.
+6. ~~M12: what happens to `web/template.html`~~ **Resolved** by the user: retired, deleted in Pool 8
+   after a gap check found nothing the served page lacks.
+7. ~~7.5's footnotes only reach the header~~ **Resolved** in Pool 8: links now in the detail panel and,
+   for list rows, in a `#list-limits` line above the block list (rows are buttons).
+8. ~~8.2's README sequencing~~ **Resolved** by 8.4's rewrite of the "Open the board" paragraph.
 9. **5.5c's `"rp"` (repeat_calls) payload field is provable but not shown** — added to make the
    recency-vs-recurrence distinction testable over HTTP; nothing in the UI displays it. Worth a look
    if that figure should be user-visible, not just internally correct.
+10. **Export race (7.8 caveat).** An export reads its rows and its freshness clocks in separate
+    queries, so a sync landing mid-request could name a different mirror state than its rows. Fix by
+    reading both in one transaction/snapshot. Bears on 9.5.
+11. **Driveway-specific text on every type's page (bears on 9.8).** The "Why blocks" footer hard-codes
+    driveway numbers on every type's page, and the Ask-Claude prompt says "blocked-driveway
+    complaints" for every type. 9.8 (no type presents blocked driveway's conclusion without its own
+    evidence) cannot pass until both are made type-specific or removed.
+12. **The user has not yet decided** whether to run a follow-up pool for concerns 10 and 11 before
+    section 9, or leave them for section 9's findings.
+13. **Interpretation in 8.7's caveat:** "the only way a list leaves the application" is read as the
+    served application. `src/mirror/derive.py` and `src/hotspots.py` (the 4.9/9.4 live baseline) still
+    write lists to a caller-named directory, and the JSON routes feed the page.
+14. **Small UX note from the export-link worker:** the District select filters the on-screen list
+    client-side, so after "Apply filters" with a district it lists only that district's options.
+    The export follows the on-screen district anyway.
+15. **`test_export_csv_and_brief_agree_on_row_counts_with_the_view` is now redundant** with the 7.8
+    tests; harmless, can be deleted in a later sweep.
 
 ## Where the work goes next
 
-The 7.7 bottleneck has cleared. Per `dispatch-plan.md`'s DAG, now ready:
-- **7.7a** (name the canonical type each export and view covers) and **7.8** (a view and an export
-  from one mirror state agree on every count). Both work in the export routes and their tests:
-  `src/app/server.py`, `tests/test_app.py`, and `web/app/index.html` if the view side needs it. 7.7
-  already carries the type name and a row-count agreement test, so the agent should check what is
-  already covered before adding anything.
-- **8.4** (replace the README "Open the board" instructions with the URL and export path, including
-  `docs/index.md`'s file table). Docs only: `README.md`, `docs/index.md`.
-- **8.7** (stop generating committed output to `out/`) — **held**, see concern 6. When it is
-  released it touches `src/hotspots.py`, the tracked `out/` files and possibly `web/template.html`,
-  and it must not edit `README.md` or `docs/index.md` (8.4's), only report what it makes stale.
-  Verification for it belongs in a new test file, not `tests/test_app.py`.
+**Ready now** (dependencies met), per `dispatch-plan.md`:
+- **8.5** (record the decisions in `docs/parking-hotspots/decisions.md`: mirror, source-paced sync,
+  served application, shared triage, role selection, removal of the scheduled job; verify the
+  narrative matches the specs). Its dependencies 8.1, 8.1a, 8.2, 8.3, 8.4, 8.6, 8.7, 8.8 are all
+  done. Docs only. Should also record the M12 decision and the `b04731c` pointer.
+- **8.9** (sweep stale references to the retired template, the deleted `out/` files and bare
+  `python3 src/hotspots.py`; the known sites are listed in its `tasks.md` line). Comments, docstrings
+  and docs across several files, including `server.py`, `index.html` and `test_app.py` — one worker
+  owns all of those, so it cannot run beside a worker that edits them.
+- **Concerns 10 and 11** above (export race; driveway-specific footer and Ask-Claude prompt). Not
+  numbered tasks; both live in `server.py`/`index.html`/`test_app.py`.
+- **Section 9** (verification) is now reachable: 9.1–9.8 have their dependencies met. 9.8 should
+  wait for concern 11; 9.5 is best run after concern 10.
 
-**8.5** (decisions.md narrative) waits on 8.4 and 8.7. Section 9 is verification and comes last.
-
-**Region split for the ready tasks** (checked for file overlap): 7.7a+7.8 own `server.py`,
-`test_app.py` and `index.html`; 8.4 owns `README.md` and `docs/index.md`; 8.7 (when released) owns
-`hotspots.py`, `out/` and any new test file. None share a file. Workers running concurrently should
-run only their own test files, since the full suite can fail transiently on another agent's
-half-finished edit; the orchestrator runs the full suite once at the end.
+**Region split:** 8.5 touches only `docs/parking-hotspots/decisions.md`; 8.9 and concerns 10/11 all
+touch `server.py`/`index.html`/`test_app.py`, so they go to one worker (or run in sequence), while
+8.5 can run beside it. Workers running concurrently run only their own test files; the orchestrator
+runs the full suite once at the end.
 
 **Dispatch convention for this session (user instruction):** two tasks per sub-agent within a pool
 wherever the regions allow it, and otherwise separate sub-agents running asynchronously.
 
 ## Cost so far
 
-Figures below cover pools 1–5 only; pools 6 and 7 were not recorded. Worker agents across five
-completed pools: ~1.94M tokens (17 agents). Pool 5 (4 agents, clean on
+Figures below cover pools 1–5 only; pools 6 and 7 were not recorded; Pool 8 is in its History entry.
+Worker agents across five completed pools: ~1.94M tokens (17 agents). Pool 5 (4 agents, clean on
 first attempt) ran ~493k tokens total, in line with Pool 4's per-agent average once you account for
 Pool 4's re-dispatch. Region-bundling (multiple tasks per agent, one region) continues to look cheaper
 than one-agent-per-task, per Pool 3's original finding.

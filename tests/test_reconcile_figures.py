@@ -473,7 +473,9 @@ def test_run_live_builds_expected_command_without_executing_it(monkeypatch, tmp_
     assert str(rf.HOTSPOTS) in cmd
     assert "--violation" in cmd and "No Parking Sign" in cmd
     assert str(tmp_path / "watchlist.csv") in cmd
-    assert str(tmp_path / "triage-board.html") in cmd
+    # hotspots.py no longer takes a board, so the command must not pass one.
+    assert "--board" not in cmd
+    assert not any("triage-board" in part for part in cmd)
     assert captured["kwargs"]["cwd"] == rf.REPO_ROOT
 
 

@@ -18,9 +18,12 @@ something worth re-running on every `pytest` invocation.
 import csv
 import datetime
 import html
+import html.parser
 import io
 import json
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -344,6 +347,55 @@ def test_interpretation_limits_are_footnoted_at_every_figure_they_qualify(client
     assert "different ways by HRM" in body        # lim-address
     assert "not a boundary HRM" in body          # lim-block-label
     assert "whole census block" in body          # lim-dwelling
+
+
+def test_block_label_and_dwelling_rate_footnotes_reach_the_list_and_detail_panel(client):
+    """Follow-up to task 7.5: 7.5 linked the derived block label and the
+    block-wide dwelling rate to their footnotes from the header stats only,
+    while the same two figures also sit, unlinked, in the block list and the
+    detail panel's evidence sentence (`evidenceBlock()`). They now carry the
+    identical links there -- same markup, same `#lim-block-label` /
+    `#lim-dwelling` targets.
+
+    No browser exists in this environment, so this pins the markup and the
+    wiring rather than a click: the anchor text is taken *from the header* and
+    required verbatim in the detail-panel renderer, and the structural facts
+    that keep a link click from being swallowed by, or mis-triggering, row
+    selection are checked in the script: no anchor inside a row `<button>`
+    (whose `onclick` selects the row, and where a nested link is invalid
+    HTML), the detail panel a sibling of that button, and no click handler on
+    the panel itself.
+    """
+    body = client.get("/").get_data(as_text=True)
+    script = body.split("<script>", 1)[1]
+    markup = body.split("<script>", 1)[0]
+
+    # The two anchors exactly as the header stats write them ...
+    label_link = re.search(
+        r'<a class="lim" href="#lim-block-label" title="[^"]*">\[block label\]</a>', markup).group(0)
+    rate_link = re.search(
+        r'<a class="lim" href="#lim-dwelling" title="[^"]*">\[dwelling rate\]</a>', markup).group(0)
+    # ... are, character for character, what the detail panel's evidence sentence uses.
+    assert f"const LIM_BLOCK_LABEL = `{label_link}`;" in script
+    assert f"const LIM_DWELLING = `{rate_link}`;" in script
+    evidence_block = script.split("function evidenceBlock(b){", 1)[1].split("\n}\n", 1)[0]
+    assert "${LIM_BLOCK_LABEL}" in evidence_block   # beside the derived label (b.s)
+    assert "${LIM_DWELLING}" in evidence_block      # beside the dwelling rate (b.r / b.dw)
+
+    # The block list carries both links too, above its column headings, and
+    # only in block mode (the doorway list shows neither figure).
+    list_limits = re.search(r'<p class="list-limits" id="list-limits">(.*?)</p>', markup, re.S).group(1)
+    assert label_link in list_limits and rate_link in list_limits
+    assert 'listLimits.hidden = mode !== "block"' in script
+
+    # Links cannot fight row selection: none inside the row button's template,
+    # the panel is appended beside the button (not into it), and only the row
+    # button and the panel's own status/address/ask buttons have click handlers.
+    row_template = script.split('b.innerHTML = mode === "block"', 1)[1].split("b.onclick = () => {", 1)[0]
+    assert "<a " not in row_template
+    assert "frag.appendChild(b);\n    if (openKey === it.key) frag.appendChild(detail(it, s, V));" in script
+    assert "d.onclick" not in script
+    assert re.search(r'querySelectorAll\("\[data-s\]"\)\.forEach\(btn => btn\.onclick = e => \{\s*e\.stopPropagation', script)
 
 
 def test_index_is_reachable_with_a_bare_client_no_headers(client):
@@ -2298,3 +2350,824 @@ def test_export_csv_and_brief_agree_on_row_counts_with_the_view(client, clean_db
     _, csv_rows = _csv_section(csv_text, "DOORWAYS")
     assert len(csv_rows) == doorways_json["count"] == 2
     assert f"Doorways ({doorways_json['count']})" in brief_body
+
+
+# ------------------------------------------ naming the type on views and exports (7.7a)
+#
+# Task 7.7a: "verify a reader can tell which type they are looking at without
+# cross-referencing a filename." The CSV is downloaded as `{slug}-export.csv`,
+# so a reader holding only the file, a pasted table, a screenshot or a printed
+# brief has the *content* and nothing else. Every test below therefore reads
+# response bodies only -- never `Content-Disposition`, never the request URL,
+# never the slug the test itself asked for -- and each would fail if the type
+# name were removed from the surface under test. (7.7's own
+# `test_export_*_states_the_violation_type_plainly` tests check the type is
+# stated at all, in one type, in one place; these check where, on both
+# exports, for two different types at once, and on the served view.)
+
+_TWO_TYPES = [("blocking-driveway", "Blocking Driveway"), ("no-parking-sign", "No Parking Sign")]
+
+
+class _BriefParser(html.parser.HTMLParser):
+    """The visible structure of `export_brief`'s HTML, as data: title, h1, h2s,
+    list items, paragraphs, and each table's caption, header and rows -- so a
+    test compares what a reader *sees* (entities decoded, markup stripped)
+    rather than substrings of markup."""
+
+    _TRACKED = ("title", "h1", "h2", "li", "p", "caption", "td", "th")
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.title, self.h1, self.h2, self.li, self.p = "", [], [], [], []
+        self.tables, self.text = [], ""
+        self._tag = self._buf = self._table = self._row = None
+        self._row_has_th = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self._table = {"caption": "", "header": None, "rows": []}
+        elif tag == "tr":
+            self._row, self._row_has_th = [], False
+        if tag in self._TRACKED:
+            self._tag, self._buf = tag, []
+            if tag == "th":
+                self._row_has_th = True
+
+    def handle_data(self, data):
+        self.text += data
+        if self._buf is not None:
+            self._buf.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == self._tag and self._buf is not None:
+            text = " ".join("".join(self._buf).split())
+            if tag == "title":
+                self.title = text
+            elif tag == "h1":
+                self.h1.append(text)
+            elif tag == "h2":
+                self.h2.append(text)
+            elif tag == "li":
+                self.li.append(text)
+            elif tag == "p":
+                self.p.append(text)
+            elif tag == "caption":
+                self._table["caption"] = text
+            elif tag in ("td", "th") and self._row is not None:
+                self._row.append(text)
+            self._tag = self._buf = None
+        elif tag == "tr" and self._row is not None:
+            if self._row_has_th:
+                self._table["header"] = self._row
+            else:
+                self._table["rows"].append(self._row)
+            self._row = None
+        elif tag == "table" and self._table is not None:
+            self.tables.append(self._table)
+            self._table = None
+
+    def table_for(self, noun):
+        """`(header, [row dict, ...])` of the table captioned for `noun`
+        ("doorways" or "blocks"), or `(None, [])` when the brief printed a
+        "No <noun> match ..." sentence instead of a table."""
+        for t in self.tables:
+            if t["caption"].endswith(noun):
+                return t["header"], [dict(zip(t["header"], r)) for r in t["rows"]]
+        return None, []
+
+    def list_items(self):
+        """`li` texts as `{label: value}` for every "Label: value" item (the
+        Filters and Freshness lists) -- the limits list's items happen to
+        contain colons too, which is harmless: nothing looks those up."""
+        return dict(t.split(": ", 1) for t in self.li if ": " in t)
+
+
+def _parse_brief(body):
+    parsed = _BriefParser()
+    parsed.feed(body)
+    return parsed
+
+
+@pytest.mark.parametrize("slug,name", _TWO_TYPES)
+def test_export_csv_names_its_type_on_top_and_on_every_row_not_only_in_the_filename(
+        client, clean_db, slug, name):
+    """Task 7.7a, CSV: the file's own first row names the canonical type, and
+    every doorway row and every block row carries it too -- a table pasted out
+    of the file into a spreadsheet that already holds another type's rows
+    (the very mix-up the type-scoped routes exist to prevent) still says which
+    rows are which. The other type's name appears nowhere in the file."""
+    seed_two_types_two_doorway_blocks(clean_db)
+    other = next(n for s, n in _TWO_TYPES if s != slug)
+
+    text = client.get(f"/api/types/{slug}/export.csv").get_data(as_text=True)
+
+    assert next(csv.reader(io.StringIO(text))) == ["violation_type", name]
+    for marker in ("DOORWAYS", "BLOCKS"):
+        header, rows = _csv_section(text, marker)
+        assert header[-1] == "Violation Type"
+        assert rows, f"seed lists at least one {marker.lower()} row for {name}"
+        assert {r["Violation Type"] for r in rows} == {name}
+    assert other not in text
+
+
+@pytest.mark.parametrize("slug,name", _TWO_TYPES)
+def test_export_brief_names_its_type_in_title_heading_lede_and_both_tables(
+        client, clean_db, slug, name):
+    """Task 7.7a, brief: the document title (a browser tab, a printed
+    header), the h1, the introductory line and a caption on each table -- so a
+    table lifted out of the brief on its own still says which type it lists --
+    all state the canonical type. The other type's name is nowhere in the
+    visible text."""
+    seed_two_types_two_doorway_blocks(clean_db)
+    other = next(n for s, n in _TWO_TYPES if s != slug)
+
+    parsed = _parse_brief(client.get(f"/types/{slug}/export").get_data(as_text=True))
+
+    assert name in parsed.title
+    assert parsed.h1 == [name]
+    lede = next(p for p in parsed.p if p.startswith("Doorway and block list export"))
+    assert f"for the violation type {name}" in lede
+    assert [t["caption"] for t in parsed.tables] == [f"{name} - doorways", f"{name} - blocks"]
+    assert other not in parsed.text
+
+
+def test_served_view_names_its_type_from_the_payload_not_a_hard_coded_default(client):
+    """Task 7.7a, the served page: `web/app/index.html` is one static file for
+    all 30 types, so a type named in its markup is named wrongly on 29 of
+    them -- the eyebrow used to say "blocked driveway service requests"
+    unconditionally. It now carries an empty placeholder the boot script fills
+    from `doorPayload.type` (what the server says these rows are rows of),
+    alongside the document title and a heading on the list itself. No
+    browser here: this pins the markup and the script's wiring; the payload
+    half (that `type` is the canonical name for every route) is the next test.
+    """
+    body = client.get("/types/no-parking-sign").get_data(as_text=True)
+    markup = body.split("<script>")[0]
+
+    assert "blocked driveway service requests" not in markup
+    assert 'violation type: <span id="type-name">' in markup
+    assert 'id="list-type"' in markup
+    assert 'const typeName = doorPayload.type || blockPayload.type || "";' in body
+    assert 'set("type-name", typeName || "unknown");' in body
+    assert 'set("list-type", typeName ? `Violation type: ${typeName}` : "");' in body
+    assert "document.title = `${typeName} · ${document.title}`" in body
+
+
+def test_every_tracked_types_payloads_carry_that_types_canonical_name(client):
+    """The other half of the served view's naming: the value the page writes
+    into its eyebrow, list heading and title is `type` off the doorway and
+    block payloads, so every tracked slug must answer with its own canonical
+    name -- an empty store included (nothing seeded here), since a type with
+    no rows is exactly where a page would otherwise have nothing to name."""
+    for slug, name in app_server._SLUG_TO_CANONICAL.items():
+        for route in ("doorways", "blocks"):
+            payload = client.get(f"/api/types/{slug}/{route}").get_json()
+            assert payload["type"] == name, (slug, route)
+
+
+def test_untracked_type_page_and_brief_say_they_cover_no_type(client):
+    """Task 7.7a, the untracked-type page: it lists tracked types as links, so
+    without a plain statement a reader could take it for a page about one of
+    them. It says, in its own content, that it covers no violation type --
+    for `/types/<slug>` and for `/types/<slug>/export`, which share it."""
+    for path in ("/types/not-a-real-type", "/types/not-a-real-type/export"):
+        resp = client.get(path)
+        assert resp.status_code == 404
+        text = " ".join(_parse_brief(resp.get_data(as_text=True)).text.split())
+        assert "covers no violation type" in text, path
+        assert "not-a-real-type" in text
+        assert "is not a tracked type" in text
+
+
+# ----------------------------------- view and exports agree, one mirror state (7.8)
+#
+# Task 7.8: "verify a view and an export taken together agree on every count and
+# name the same mirror state." One seeded store, three surfaces read over real
+# HTTP -- the view (`/api/types/<slug>/doorways` + `/blocks` + `/api/freshness`,
+# the three fetches the page's script renders from), the CSV and the brief --
+# and every count, every cell, every filter value and every mirror-state
+# identifier each one states is compared. Expected counts are also written out
+# by hand from the seed (not only "the three match"), so three surfaces
+# agreeing on the same wrong answer still fail.
+
+T1 = datetime.datetime(2026, 9, 10, 4, 0, tzinfo=datetime.UTC)   # first sync
+T2 = datetime.datetime(2026, 9, 17, 4, 0, tzinfo=datetime.UTC)   # second sync
+RING_B = [[[10, 10], [10, 11], [11, 11], [11, 10], [10, 10]]]
+
+
+def _days_before_latest(days):
+    return LATEST - datetime.timedelta(days=days)
+
+
+def _record_sync(conn, finished_at, source_edit):
+    """One completed sync of both currency layers: `layer_state` moves to it
+    (that is where `mirror_freshness` reads the clocks) and a `sync_runs` row
+    is left behind (that is where a reader looking for "some earlier sync"
+    would find one)."""
+    for layer in ("service_requests", "custom_fields"):
+        set_layer_state(conn, layer, source_last_edit=source_edit,
+                        last_attempt_at=finished_at, last_attempt_ok=True,
+                        last_success_at=finished_at,
+                        next_due_at=finished_at + datetime.timedelta(days=1))
+        insert_pulled_edit(conn, layer, source_edit, finished_at=finished_at)
+
+
+def _seed_first_sync_state(conn):
+    """What the mirror held after the first sync: block A (district 7, 200
+    dwellings) with two doorways of two calls each. Newest call: LATEST - 3d."""
+    insert_census_area(conn, "12090999", SQUARE_RING, dwellings=200, object_id=1)
+    insert_census_area(conn, "12091111", RING_B, dwellings=0, object_id=2)
+    seed_driveway_call(conn, 7001, "1 FIRST ST, HALIFAX", _days_before_latest(10))
+    seed_driveway_call(conn, 7002, "1 FIRST ST, HALIFAX", _days_before_latest(6), towed="Y")
+    seed_driveway_call(conn, 7003, "2 SECOND ST, HALIFAX", _days_before_latest(8))
+    seed_driveway_call(conn, 7004, "2 SECOND ST, HALIFAX", _days_before_latest(3))
+    _record_sync(conn, T1, T1 - datetime.timedelta(days=2))
+
+
+def _seed_second_sync_state(conn):
+    """What the second sync added, on top of the first. Boundaries planted on
+    purpose: FIRST ST goes from two calls to three (crossing `min_calls=3`);
+    FOURTH ST has a call exactly 30 days before the newest (the inclusive edge
+    of `recency_days=30`); THIRD ST has one call (listed only at
+    `min_calls=1`, with no median gap); NINTH/TENTH are a second block, in
+    district 8 with 0 dwellings (a `None` calls-per-1k rate). Newest call: LATEST.
+
+    Default list afterwards: FIRST(3), SECOND(2), FOURTH(2), NINTH(2),
+    TENTH(2) = 5 doorways in 2 blocks.
+    """
+    seed_driveway_call(conn, 7005, "1 FIRST ST, HALIFAX", _days_before_latest(2))
+    seed_driveway_call(conn, 7006, "4 FOURTH ST, HALIFAX", _days_before_latest(30))
+    seed_driveway_call(conn, 7007, "4 FOURTH ST, HALIFAX", _days_before_latest(1))
+    seed_driveway_call(conn, 7008, "3 THIRD ST, HALIFAX", _days_before_latest(4))
+    seed_driveway_call(conn, 7009, "5 NINTH AVE, HALIFAX", _days_before_latest(12),
+                       lat=10.5, lon=10.5, district="8")
+    seed_driveway_call(conn, 7010, "5 NINTH AVE, HALIFAX", _days_before_latest(5),
+                       lat=10.5, lon=10.5, district="8")
+    seed_driveway_call(conn, 7011, "6 TENTH AVE, HALIFAX", _days_before_latest(9),
+                       lat=10.5, lon=10.5, district="8")
+    seed_driveway_call(conn, 7012, "6 TENTH AVE, HALIFAX", _days_before_latest(0),
+                       lat=10.5, lon=10.5, district="8")
+    _record_sync(conn, T2, T2 - datetime.timedelta(days=1))
+
+
+def _csv_cell(value, key):
+    """How `_write_csv_table` writes one payload value: `None` is an empty
+    cell, an address list is `; `-joined."""
+    return "; ".join(value) if key == "addrs" else ("" if value is None else str(value))
+
+
+def _brief_cell(value, key):
+    """How the brief's table shows one payload value: the page's own en dash
+    for a value that does not exist (`index.html` shows the same for a missing
+    dwelling rate or vehicle count), never the word "None"."""
+    return "; ".join(value) if key == "addrs" else ("–" if value is None else str(value))
+
+
+def _gather(client, slug, query=""):
+    """Everything the view, the CSV and the brief state for one type and one
+    filter query, fetched over HTTP and parsed."""
+    qs = f"?{query}" if query else ""
+    csv_text = client.get(f"/api/types/{slug}/export.csv{qs}").get_data(as_text=True)
+    brief = _parse_brief(client.get(f"/types/{slug}/export{qs}").get_data(as_text=True))
+    return {
+        "doors": client.get(f"/api/types/{slug}/doorways{qs}").get_json(),
+        "blocks": client.get(f"/api/types/{slug}/blocks{qs}").get_json(),
+        "fresh": client.get("/api/freshness").get_json(),
+        "csv_text": csv_text,
+        "csv_meta": _csv_metadata(csv_text),
+        "csv_doors": _csv_section(csv_text, "DOORWAYS"),
+        "csv_blocks": _csv_section(csv_text, "BLOCKS"),
+        "brief": brief,
+        "brief_doors": brief.table_for("doorways"),
+        "brief_blocks": brief.table_for("blocks"),
+    }
+
+
+def _assert_view_and_exports_agree(g):
+    """Every count, cell, filter value and mirror-state identifier the three
+    surfaces state, compared. Each `assert` carries a label naming what
+    disagreed, so a deliberately broken surface (see the canary tests below)
+    is shown to fail *for the intended reason*, not just to fail."""
+    doors, blocks, fresh = g["doors"], g["blocks"], g["fresh"]
+    meta, brief = g["csv_meta"], g["brief"]
+    csv_door_header, csv_doors = g["csv_doors"]
+    csv_block_header, csv_blocks = g["csv_blocks"]
+    brief_door_header, brief_doors = g["brief_doors"]
+    brief_block_header, brief_blocks = g["brief_blocks"]
+    door_cols, block_cols = app_server._DOORWAY_CSV_COLUMNS, app_server._BLOCK_CSV_COLUMNS
+
+    # -- which type: the same canonical name on all three.
+    assert doors["type"] == blocks["type"], "type: doorway vs block payload"
+    assert meta["violation_type"] == doors["type"], "type: csv vs view"
+    assert brief.h1 == [doors["type"]], "type: brief vs view"
+
+    # -- every count each surface states about the lists.
+    assert doors["count"] == len(doors["rows"]), "view: doorway count vs its own rows"
+    assert blocks["count"] == len(blocks["blocks"]), "view: block count vs its own rows"
+    assert int(meta["doorway_count"]) == doors["count"], "doorway count: csv stated vs view"
+    assert int(meta["block_count"]) == blocks["count"], "block count: csv stated vs view"
+    assert len(csv_doors) == doors["count"], "doorway count: csv rows vs view"
+    assert len(csv_blocks) == blocks["count"], "block count: csv rows vs view"
+    headings = {m.group(1): int(m.group(2)) for h in brief.h2
+                if (m := re.fullmatch(r"(Doorways|Blocks) \((\d+)\)", h))}
+    assert headings == {"Doorways": doors["count"], "Blocks": blocks["count"]}, \
+        "counts: brief headings vs view"
+    assert len(brief_doors) == doors["count"], "doorway count: brief rows vs view"
+    assert len(brief_blocks) == blocks["count"], "block count: brief rows vs view"
+    for noun, count in (("doorways", doors["count"]), ("blocks", blocks["count"])):
+        if count == 0:   # an empty list is stated, not silently a missing table
+            assert any(p.startswith(f"No {noun} match") for p in brief.p), \
+                f"brief: empty {noun} list not stated"
+
+    # -- every cell of every row, in the same order.
+    # (the brief prints no table at all for an empty list -- checked above)
+    labels = [label for _, label in door_cols]
+    assert csv_door_header[:-1] == labels, "doorway columns: csv"
+    assert brief_door_header == (labels if doors["count"] else None), "doorway columns: brief"
+    labels = [label for _, label in block_cols]
+    assert csv_block_header[:-1] == labels, "block columns: csv"
+    assert brief_block_header == (labels if blocks["count"] else None), "block columns: brief"
+    for i, row in enumerate(doors["rows"]):
+        for key, label in door_cols:
+            assert csv_doors[i][label] == _csv_cell(row[key], key), f"doorway {i} {label}: csv"
+            assert brief_doors[i][label] == _brief_cell(row[key], key), f"doorway {i} {label}: brief"
+    for i, row in enumerate(blocks["blocks"]):
+        for key, label in block_cols:
+            assert csv_blocks[i][label] == _csv_cell(row[key], key), f"block {i} {label}: csv"
+            assert brief_blocks[i][label] == _brief_cell(row[key], key), f"block {i} {label}: brief"
+
+    # -- the view's header figures, re-derived from the exported rows.
+    summary = doors["summary"]
+    for name, rows in (("csv", csv_doors), ("brief", brief_doors)):
+        assert sum(int(r["Vehicles Distinct"]) for r in rows) == summary["distinct"], name
+        assert sum(int(r["Vehicles Seen"]) for r in rows) == summary["seen"], name
+        assert sum(1 for r in rows if int(r["Doorways Calling On Block"]) >= 2) \
+            == summary["with_neighbour"], name
+
+    # -- each exported block's figures against the exported doorways it rolls up.
+    for name, drows, brows in (("csv", csv_doors, csv_blocks), ("brief", brief_doors, brief_blocks)):
+        for b in brows:
+            members = [d for d in drows if d["Block"] == b["Block"]]
+            assert int(b["Doorways"]) == len(members), f"{name} block {b['Block']} doorways"
+            for block_label, doorway_label in (("Calls (12mo)", "Calls (12mo)"),
+                                                ("Calls (Total)", "Calls (Total)"),
+                                                ("Tows", "Tows")):
+                assert int(b[block_label]) == sum(int(d[doorway_label]) for d in members), \
+                    f"{name} block {b['Block']} {block_label}"
+            assert set(b["Addresses"].split("; ")) == {d["Address"] for d in members}, \
+                f"{name} block {b['Block']} addresses"
+
+    # -- filter values and the "filters in effect" statement.
+    f = doors["filters"]
+    assert blocks["filters"] == f, "filters: doorway vs block payload"
+    assert meta["filter: district"] == (f["district"] or ""), "filter: csv district"
+    for k in ("min_calls", "min_doorways", "recur_days", "recency_days"):
+        assert meta[f"filter: {k}"] == str(f[k]), f"filter: csv {k}"
+    items = brief.list_items()
+    assert items["District"] == (f["district"] or "every district"), "filter: brief district"
+    assert items["Minimum recent calls per doorway"] == str(f["min_calls"])
+    assert items["Minimum still-calling doorways per block"] == str(f["min_doorways"])
+    assert items["Recurrence window"] == f"{f['recur_days']} days"
+    assert items["Recency window"] == f"{f['recency_days']} days"
+    bits = app_server._active_filter_bits(f)
+    in_effect = f"Filtered by {', '.join(bits)}." if bits else "Default filters -- none active."
+    assert meta["filters_in_effect"] == in_effect, "filters in effect: csv"
+    assert in_effect in brief.p, "filters in effect: brief"
+
+    # -- the data date and the recency note, worded as the page words them.
+    assert meta["latest_call_date"] == (doors["latest"] or ""), "latest call date: csv vs view"
+    note = (f"Showing calls from the last {f['recency_days']} days, since {doors['latest']}."
+            if doors["latest"] else "")
+    assert meta["recency_note"] == note, "recency note: csv"
+    assert (note in brief.p) if note else True, "recency note: brief"
+
+    # -- the mirror state: what `/api/freshness` (the page's banner and footer)
+    # says the mirror last did, named identically by both exports.
+    assert meta["last_success_at"] == fresh["last_success_at"], "mirror state: csv last_success_at"
+    assert meta["last_attempt_at"] == fresh["last_attempt_at"], "mirror state: csv last_attempt_at"
+    assert meta["next_due_at"] == fresh["next_due_at"], "mirror state: csv next_due_at"
+    assert meta["most_recent_call_date"] == fresh["most_recent_call_date"], \
+        "mirror state: csv most_recent_call_date"
+    assert items["Last successful sync"] == fresh["last_success_at"], \
+        "mirror state: brief last_success_at"
+    assert items["Next update due"] == fresh["next_due_at"], "mirror state: brief next_due_at"
+    assert items["Most recent call in the data"] == fresh["most_recent_call_date"], \
+        "mirror state: brief most_recent_call_date"
+
+
+def test_view_and_exports_agree_and_all_name_the_latest_of_two_syncs(client, clean_db):
+    """Task 7.8: the same store read after the first sync and again after the
+    second. After each, every surface agrees with every other on every count
+    (hand-written expectations below, so agreeing on a wrong count still
+    fails) and all three name that sync -- after the second, the *second*,
+    with the first sync's timestamp present nowhere in either export even
+    though its `sync_runs` rows are still in the store."""
+    slug = "blocking-driveway"
+
+    _seed_first_sync_state(clean_db)
+    first = _gather(client, slug)
+    _assert_view_and_exports_agree(first)
+    assert (first["doors"]["count"], first["blocks"]["count"]) == (2, 1)
+    assert first["fresh"]["last_success_at"] == T1.isoformat()
+    assert first["doors"]["latest"] == "2026-05-29"
+
+    _seed_second_sync_state(clean_db)
+    second = _gather(client, slug)
+    _assert_view_and_exports_agree(second)
+    assert (second["doors"]["count"], second["blocks"]["count"]) == (5, 2)
+    assert {r["a"]: r["m"] for r in second["doors"]["rows"]} == {
+        "1 First St": 3, "2 Second St": 2, "4 Fourth St": 2,
+        "5 Ninth Ave": 2, "6 Tenth Ave": 2,
+    }
+
+    # Two syncs are in the store; the state named is the latest one.
+    with clean_db.cursor() as cur:
+        cur.execute("SELECT count(DISTINCT finished_at) FROM sync_runs WHERE layer = 'service_requests'")
+        assert cur.fetchone()[0] == 2
+    assert second["fresh"]["last_success_at"] == T2.isoformat() != first["fresh"]["last_success_at"]
+    assert second["csv_meta"]["last_success_at"] == T2.isoformat()
+    assert second["brief"].list_items()["Last successful sync"] == T2.isoformat()
+    assert T1.isoformat() not in second["csv_text"]
+    assert T1.isoformat() not in second["brief"].text
+    # ... and the data date moved with it, on all three.
+    assert second["doors"]["latest"] == second["csv_meta"]["latest_call_date"] == "2026-06-01"
+    assert second["fresh"]["most_recent_call_date"].startswith("2026-06-01")
+
+
+# (filter query, doorways listed, blocks listed) -- each count worked out from
+# `_seed_second_sync_state`'s docstring, not read back from the app.
+_FILTER_CASES = [
+    # no filter: FIRST, SECOND, FOURTH, NINTH, TENTH; blocks A (3 doorways) and B (2)
+    ("", 5, 2),
+    # THIRD's single call is now enough; district 8's block B is out: A has 4 doorways
+    ("min_calls=1&district=7", 4, 1),
+    # only FIRST ST has 3 calls, and one doorway cannot make a two-doorway block
+    ("min_calls=3", 1, 0),
+    # the inclusive edge: FOURTH's call exactly 30 days back is still in a 30-day window ...
+    ("recency_days=30", 5, 2),
+    # ... and one day narrower it is out, leaving FOURTH one call (below min_calls=2)
+    ("recency_days=29", 4, 2),
+    # every one of the five filters off its default at once
+    ("min_calls=1&district=7&min_doorways=3&recency_days=30&recur_days=100", 4, 1),
+]
+
+
+@pytest.mark.parametrize("query,doorway_count,block_count", _FILTER_CASES)
+def test_view_and_exports_agree_under_the_same_filter(
+        client, clean_db, query, doorway_count, block_count):
+    """Task 7.8, the filtered cases: one filter query applied identically to
+    the view's routes and both exports -- including the two boundary cases
+    (a call exactly at the recency edge, a doorway exactly at `min_calls`) and
+    an empty block list -- with every count, cell and filter statement
+    agreeing, and every surface naming the second sync."""
+    _seed_first_sync_state(clean_db)
+    _seed_second_sync_state(clean_db)
+
+    g = _gather(client, "blocking-driveway", query)
+
+    _assert_view_and_exports_agree(g)
+    assert (g["doors"]["count"], g["blocks"]["count"]) == (doorway_count, block_count)
+    assert g["csv_meta"]["last_success_at"] == T2.isoformat()
+    assert g["brief"].list_items()["Last successful sync"] == T2.isoformat()
+    if query:
+        # A filtered list cannot be mistaken for the default one, on either export.
+        assert g["csv_meta"]["filters_in_effect"].startswith("Filtered by ")
+    fourth = [r for r in g["doors"]["rows"] if r["a"] == "4 Fourth St"]
+    if "recency_days=30" in query:
+        assert [r["m"] for r in fourth] == [2]
+    if "recency_days=29" in query:
+        assert fourth == []
+
+
+def test_all_five_filters_are_named_in_the_same_words_on_both_exports(client, clean_db):
+    _seed_first_sync_state(clean_db)
+    _seed_second_sync_state(clean_db)
+    query = "min_calls=1&district=7&min_doorways=3&recency_days=30&recur_days=100"
+
+    g = _gather(client, "blocking-driveway", query)
+
+    expected = ("Filtered by district 7, min. recent calls ≥ 1, min. calling doorways/block ≥ 3, "
+                "recency window ≤ 30 days, recurrence window ≤ 100 days.")
+    assert g["csv_meta"]["filters_in_effect"] == expected
+    assert expected in g["brief"].p
+
+
+def test_a_doorway_with_no_median_gap_reads_the_same_in_both_exports_as_in_the_view(
+        client, clean_db):
+    """`None` values are where two renderings of one payload most easily
+    diverge (a CSV writes an empty cell; a Jinja `{{ None }}` prints the word
+    "None"). THIRD ST (one call, so no gap between calls) and block B (0
+    dwellings, so no calls-per-1k rate) are the cases: the view says `null`,
+    the CSV an empty cell, the brief an en dash -- never the string "None"."""
+    _seed_first_sync_state(clean_db)
+    _seed_second_sync_state(clean_db)
+
+    g = _gather(client, "blocking-driveway", "min_calls=1")
+
+    third = next(r for r in g["doors"]["rows"] if r["a"] == "3 Third St")
+    assert third["g"] is None
+    block_b = next(r for r in g["blocks"]["blocks"] if r["dw"] == 0)
+    assert block_b["r"] is None
+    assert "None" not in g["brief"].text
+    _assert_view_and_exports_agree(g)
+
+
+# The check above is only worth having if it can fail. Each test below breaks
+# one surface on purpose -- the kinds of drift 7.8 exists to catch -- and shows
+# `_assert_view_and_exports_agree` reject it *for the intended reason* (the
+# label in the message names what disagreed).
+
+
+@pytest.fixture
+def two_syncs_seeded(clean_db):
+    _seed_first_sync_state(clean_db)
+    _seed_second_sync_state(clean_db)
+
+
+def test_the_agreement_check_rejects_an_export_naming_the_earlier_sync(
+        client, two_syncs_seeded, monkeypatch):
+    """A stale-sync mix-up: rows from the second sync, clocks from the first."""
+    real = app_server._freshness_for_export
+
+    def names_the_first_sync(conn):
+        payload = real(conn)
+        payload["last_success_at"] = T1.isoformat()
+        return payload
+
+    monkeypatch.setattr(app_server, "_freshness_for_export", names_the_first_sync)
+
+    with pytest.raises(AssertionError, match="mirror state: csv last_success_at"):
+        _assert_view_and_exports_agree(_gather(client, "blocking-driveway"))
+
+
+def test_the_agreement_check_rejects_a_stated_count_one_too_high(
+        client, two_syncs_seeded, monkeypatch):
+    """An off-by-one in the CSV's stated doorway count (the rows are right)."""
+    real = app_server._export_csv_text
+
+    def off_by_one(*args, **kwargs):
+        return real(*args, **kwargs).replace("doorway_count,5\r\n", "doorway_count,6\r\n")
+
+    monkeypatch.setattr(app_server, "_export_csv_text", off_by_one)
+
+    with pytest.raises(AssertionError, match="doorway count: csv stated vs view"):
+        _assert_view_and_exports_agree(_gather(client, "blocking-driveway"))
+
+
+def test_the_agreement_check_rejects_a_csv_missing_its_last_block_row(
+        client, two_syncs_seeded, monkeypatch):
+    """A dropped row: the CSV's stated count and its block table disagree."""
+    real = app_server._export_csv_text
+
+    def drops_last_row(*args, **kwargs):
+        return real(*args, **kwargs).rstrip("\r\n").rsplit("\r\n", 1)[0] + "\r\n"
+
+    monkeypatch.setattr(app_server, "_export_csv_text", drops_last_row)
+
+    with pytest.raises(AssertionError, match="block count: csv rows vs view"):
+        _assert_view_and_exports_agree(_gather(client, "blocking-driveway"))
+
+
+def test_the_agreement_check_rejects_a_brief_heading_one_too_high(
+        client, two_syncs_seeded, monkeypatch):
+    real = app_server.render_template_string
+
+    def off_by_one(*args, **kwargs):
+        return re.sub(r"Blocks \((\d+)\)", lambda m: f"Blocks ({int(m.group(1)) + 1})",
+                      real(*args, **kwargs))
+
+    monkeypatch.setattr(app_server, "render_template_string", off_by_one)
+
+    with pytest.raises(AssertionError, match="counts: brief headings vs view"):
+        _assert_view_and_exports_agree(_gather(client, "blocking-driveway"))
+
+
+# ------------------------- the export link on the served page (follow-up to 7.7)
+#
+# Task 7.7 landed `GET /api/types/<slug>/export.csv` and `GET /types/<slug>/
+# export`, but nothing on the served page pointed at them. `web/app/index.html`
+# now carries `#export-csv` and `#export-brief`, whose hrefs its script sets
+# from SLUG and the filter values (`syncExportLinks()`, through the same
+# `filterQueryFrom()` the data fetches use). These tests fail if the anchors go
+# away, if the hrefs stop carrying the filters, or if the parameter names the
+# page sends drift from the ones the routes read. No browser is involved: the
+# markup is parsed from the served page, and the page's own JS functions are
+# lifted out of it and run in node with stubs (skipped where node is absent).
+
+
+class _AnchorParser(html.parser.HTMLParser):
+    """Every `<a>` in a page: its attributes, its text, and whether it sits
+    inside a `<button>` (invalid HTML, and not reliably clickable)."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.anchors, self._open, self._button_depth = [], None, 0
+        self.notes = {}
+        self._note_id = None
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "button":
+            self._button_depth += 1
+        elif tag == "a":
+            self._open = {"attrs": a, "text": "", "in_button": self._button_depth > 0}
+            self.anchors.append(self._open)
+        elif tag == "span" and "export-note" in (a.get("class") or ""):
+            self._note_id = "export-note"
+            self.notes[self._note_id] = ""
+
+    def handle_data(self, data):
+        if self._open is not None:
+            self._open["text"] += data
+        if self._note_id is not None:
+            self.notes[self._note_id] += data
+
+    def handle_endtag(self, tag):
+        if tag == "button":
+            self._button_depth -= 1
+        elif tag == "a":
+            self._open = None
+        elif tag == "span":
+            self._note_id = None
+
+
+def _page_export_anchors(client):
+    parser = _AnchorParser()
+    parser.feed(client.get("/").get_data(as_text=True))
+    by_id = {a["attrs"].get("id"): a for a in parser.anchors}
+    return by_id, parser.notes
+
+
+def test_index_page_offers_both_exports_as_real_anchors_saying_what_you_get(client):
+    by_id, notes = _page_export_anchors(client)
+
+    csv_link, brief_link = by_id.get("export-csv"), by_id.get("export-brief")
+    assert csv_link and brief_link, "the served page carries no export links"
+    assert " ".join(csv_link["text"].split()) == "Download this list (CSV)"
+    assert " ".join(brief_link["text"].split()) == "Read this list as a brief"
+    # The CSV is a download; neither anchor is nested in a row-style <button>.
+    assert "download" in csv_link["attrs"]
+    assert not csv_link["in_button"] and not brief_link["in_button"]
+    # A filtered view yields a filtered file, and the page says so beside them.
+    assert "currently filtered" in notes["export-note"]
+
+
+def test_index_page_export_links_are_not_left_pointing_nowhere(client):
+    """The anchors carry no href in the markup (the script owns it, from SLUG
+    and the filters), so they are hidden until the script has set both -- a
+    failed load must not leave a focusable link with no target."""
+    body = client.get("/").get_data(as_text=True)
+
+    assert re.search(r'<p class="list-exports" id="list-exports" hidden>', body)
+    assert 'id="export-csv" href=' not in body and 'id="export-brief" href=' not in body
+    # ... and the script un-hides them only alongside setting the hrefs.
+    fn = _js_function(body, "syncExportLinks")
+    assert fn.index("el(\"export-csv\").href =") < fn.index("box.hidden = false")
+    assert fn.index("el(\"export-brief\").href =") < fn.index("box.hidden = false")
+
+
+def _js_function(body, name):
+    m = re.search(rf"^function {name}\([^)]*\)\{{.*?^\}}", body, re.M | re.S)
+    assert m, f"function {name}() not found in the served page"
+    return m.group(0)
+
+
+def test_index_page_export_hrefs_are_built_by_the_data_fetches_own_query_builder(client):
+    body = client.get("/").get_data(as_text=True)
+
+    # One query-string builder: the data fetches and the export links share it.
+    assert "return filterQueryFrom(name => src.get(name));" in body
+    assert "const q = filterQueryFrom(get);" in _js_function(body, "exportHrefs")
+    assert "exportHrefs(SLUG, " in _js_function(body, "syncExportLinks")
+    # Re-pointed on every render(), which is what District/"Clear filters" call.
+    render_head = _js_function(body, "render").split("\n", 2)[1]
+    assert render_head.strip() == "syncExportLinks();"
+
+
+def test_index_page_filter_parameter_names_are_the_ones_the_routes_read(client):
+    """The page's `FILTER_PARAM_NAMES` (which the export hrefs are built from)
+    must be exactly the five keys `_filters_from_request` reads, or an export
+    would silently ignore a filter the list on screen honours."""
+    body = client.get("/").get_data(as_text=True)
+    names = re.search(r"^const FILTER_PARAM_NAMES = (\[.*?\]);$", body, re.M)
+    assert names, "FILTER_PARAM_NAMES not found"
+
+    with app_server.create_app().test_request_context("/"):
+        route_names = set(app_server._filters_from_request())
+
+    assert set(json.loads(names.group(1))) == route_names == {
+        "district", "min_calls", "min_doorways", "recur_days", "recency_days",
+    }
+
+
+_NEEDS_NODE = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+
+
+def _run_page_export_script(body, slug, search, districts):
+    """Run the served page's own `FILTER_PARAM_NAMES`, `filterQueryFrom`,
+    `exportHrefs` and `syncExportLinks` in node against stubs for what a
+    browser supplies (`location`, `el`, the view state `f`), calling
+    `syncExportLinks()` once per District value in `districts` -- the way
+    `render()` does after each pick. Returns each call's `[csv_href,
+    brief_href, hidden]`. No browser was involved."""
+    source = "\n".join([
+        re.search(r"^const FILTER_PARAM_NAMES = .*?;$", body, re.M).group(0),
+        _js_function(body, "filterQueryFrom"),
+        _js_function(body, "exportHrefs"),
+        _js_function(body, "syncExportLinks"),
+    ])
+    harness = f"""
+const location = {{search: {json.dumps(search)}}};
+const SLUG = {json.dumps(slug)};
+const f = {{district: null}};
+const nodes = {{"list-exports": {{hidden: true}}, "export-csv": {{}}, "export-brief": {{}}}};
+const el = id => nodes[id];
+{source}
+const out = [];
+for (const d of {json.dumps(districts)}){{
+  f.district = d;
+  syncExportLinks();
+  out.push([nodes["export-csv"].href, nodes["export-brief"].href, nodes["list-exports"].hidden]);
+}}
+console.log(JSON.stringify(out));
+"""
+    done = subprocess.run(["node", "-e", harness], capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+@_NEEDS_NODE
+def test_index_page_script_builds_export_hrefs_from_slug_and_current_filters(client):
+    body = client.get("/").get_data(as_text=True)
+
+    # Unfiltered: bare routes for the slug the page is on, and shown.
+    assert _run_page_export_script(body, "no-parking-sign", "", [None]) == [[
+        "/api/types/no-parking-sign/export.csv", "/types/no-parking-sign/export", False,
+    ]]
+
+    # All five filters on the loaded query string travel to both routes, under
+    # the names the routes read; unknown parameters (a shared link may carry
+    # any) and blank ones do not.
+    search = "?min_calls=1&min_doorways=3&recency_days=30&recur_days=100&district=7&utm=x&bogus="
+    [(csv_href, brief_href, hidden)] = _run_page_export_script(
+        body, "blocking-driveway", search, [None])
+    assert not hidden
+    assert csv_href.startswith("/api/types/blocking-driveway/export.csv?")
+    assert brief_href.startswith("/types/blocking-driveway/export?")
+    for href in (csv_href, brief_href):
+        qs = dict(p.split("=") for p in href.split("?", 1)[1].split("&"))
+        assert qs == {"district": "7", "min_calls": "1", "min_doorways": "3",
+                      "recur_days": "100", "recency_days": "30"}
+
+
+@_NEEDS_NODE
+def test_index_page_export_hrefs_follow_a_district_pick_and_clear_without_a_reload(client):
+    """The District select filters the list on screen at once (no reload), so
+    the links must follow it: a pick wins over the loaded district, and
+    "Clear filters" (`f.district = null`) falls back to the loaded query."""
+    body = client.get("/").get_data(as_text=True)
+
+    picks = _run_page_export_script(body, "blocking-driveway", "?min_calls=1", [None, "5", None])
+
+    base = "/api/types/blocking-driveway/export.csv"
+    assert [p[0] for p in picks] == [
+        f"{base}?min_calls=1", f"{base}?district=5&min_calls=1", f"{base}?min_calls=1",
+    ]
+    assert picks[1][1] == "/types/blocking-driveway/export?district=5&min_calls=1"
+
+
+@_NEEDS_NODE
+def test_the_urls_the_page_produces_are_served_by_both_export_routes(client, clean_db):
+    """End to end: take the hrefs the page's own script produces for a tracked
+    slug under non-default filters and request exactly those URLs."""
+    seed_two_doorway_block(clean_db)
+    body = client.get("/").get_data(as_text=True)
+    search = "?min_calls=1&district=7&min_doorways=2&recur_days=100&recency_days=30"
+
+    for slug in ("blocking-driveway", "no-parking-sign"):
+        [(csv_href, brief_href, _)] = _run_page_export_script(body, slug, search, [None])
+
+        csv_resp = client.get(csv_href)
+        assert csv_resp.status_code == 200, csv_href
+        assert csv_resp.content_type.startswith("text/csv")
+        meta = _csv_metadata(csv_resp.get_data(as_text=True))
+        # The file is the filtered one, not the default: every value arrived.
+        assert (meta["filter: min_calls"], meta["filter: district"]) == ("1", "7")
+        assert meta["filter: recur_days"] == "100" and meta["filter: recency_days"] == "30"
+        assert meta["filter: min_doorways"] == "2"
+
+        brief_resp = client.get(brief_href)
+        assert brief_resp.status_code == 200, brief_href
+        assert brief_resp.content_type.startswith("text/html")
+        assert "district 7, min. recent calls ≥ 1" in brief_resp.get_data(as_text=True)
+
+
+def test_untracked_type_page_shows_no_export_link(client):
+    """`_untracked_type_page` is a separate template, not `index.html`: no
+    lists, no slug, so no export link (and no dead `#export-*` anchor)."""
+    for path in ("/types/not-a-real-type", "/types/not-a-real-type/export"):
+        resp = client.get(path)
+        assert resp.status_code == 404
+        body = resp.get_data(as_text=True)
+        assert "export-csv" not in body and "export-brief" not in body, path
+        assert "Download this list" not in body and "as a brief" not in body

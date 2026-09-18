@@ -12,6 +12,7 @@ This is a **temporary working document**, not an OpenSpec artifact — delete it
 | 4.6 | DST-aware timezone conversion in `src/hotspots.py` | 4.6a |
 | 4.15 | Freeze canonical violation-type list (live query) | 4.16 |
 | 8.8 | Remove unsourced "weekly-refreshed" claim | — |
+| 8.9 | Sweep stale references to the retired template, `out/` and bare `python3 src/hotspots.py` | 8.7 |
 
 ## Tier 1 — after their Tier-0 prerequisite (parallel)
 
@@ -233,6 +234,7 @@ This is a **temporary working document**, not an OpenSpec artifact — delete it
 8.6: [4.1]
 8.7: [5.1, 7.7]
 8.8: []
+8.9: [8.7]
 9.1: [5.1, 7.1]
 9.2: [7.2a]
 9.3: [5.2, 7.5, 7.7]

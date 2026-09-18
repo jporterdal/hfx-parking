@@ -9,40 +9,69 @@ This finds the doorways where enforcement has already been tried and has not wor
 
 ## Open the board
 
-`out/triage-board.html` is the whole thing as one file. Double-click it. No server, no install,
-no account. It carries the 71 blocks, the 363 doorways, and a zoomable map of Halifax drawn from
-HRM's own street network, and it remembers your triage decisions in your browser.
+The board is a served application, not a file. Visit its URL in a browser: no install, no
+account, no key. It lists the blocks and the doorways still calling, on a map of Halifax drawn
+from HRM's own street network, for one violation type at a time. `/` opens the default type,
+Blocking Driveway, and `/types/<slug>` opens another (`/api/types` lists every tracked type and
+its slug).
 
-The served application persists those decisions in the mirror's own database, so anyone who
+The served application persists triage decisions in the mirror's own database, so anyone who
 visits its URL sees the same triage state, and a team works one shared list instead of three.
 
-## Run it
+To run it yourself you need the mirror's Postgres database, whose address is read from
+`HFX_MIRROR_DSN`, and a `PORT` (default 8000):
 
 ```bash
-python3 src/hotspots.py
+python3 src/app/server.py                                    # development server
+venv/bin/gunicorn wsgi:app --bind 0.0.0.0:$PORT              # what a deployment runs
 ```
 
-No keys and no install for the viewer: opening the board takes nothing but a browser. The
-pipeline that builds it reads HRM open data over HTTPS and writes every output: the doorway
-list, the block list, and the standalone board.
+Then open `http://localhost:8000/` (or the `PORT` you set). The mirror is loaded and kept current by
+`python3 src/mirror/load.py` and `python3 src/mirror/sync.py`.
 
-The mirror and the server that will replace this pipeline do have dependencies, listed in `requirements.txt` (this project
+## Where a list leaves the application
+
+A list leaves the application through its two export routes, both for one violation type and
+both taking the same filters as the page (`district`, `min_calls`, `min_doorways`,
+`recur_days`, `recency_days`):
+
+- `GET /api/types/<slug>/export.csv` downloads the doorway and block lists as one CSV: a
+  preamble naming the violation type, the counts, the freshness clocks, the filter values in
+  effect and the interpretation limits, then a DOORWAYS table and a BLOCKS table.
+- `GET /types/<slug>/export` is the same content as a readable page (a brief).
+
+For example, `/api/types/blocking-driveway/export.csv?district=7`. The application does not
+write lists to files on the server, and this repository no longer commits generated lists.
+
+## Dependencies
+
+No keys and no install for the viewer: opening the board takes nothing but a browser.
+
+The mirror and the server do have dependencies, listed in `requirements.txt` (this project
 previously had no manifest at all): a Postgres database and a Python dependency set (Flask
 behind a WSGI server such as gunicorn). `src/hotspots.py` stays stdlib-only, and a viewer still
 installs nothing.
 
-| Output | What it is |
-|--------|------------|
-| `out/triage-board.html` | The board. One file, opens in any browser. |
-| `out/watchlist.csv` / `.md` | The 363 doorways still calling. |
-| `out/blocks.csv` / `.md` | The 71 blocks where two or more doorways are still calling. |
+## Lists from the command line
 
-```bash
-python3 src/hotspots.py --violation "No Parking Sign" --district 7
-```
+Two scripts still write lists to a directory you name; neither is the product and neither
+writes to `out/`:
 
-Nothing runs it on a schedule any more: the nightly workflow that committed to `out/` has been
-removed, and scheduled work moves to the deployment that serves the application.
+- `python3 src/mirror/derive.py <dir> --violation Driveway` derives the lists from the mirror.
+- `python3 src/hotspots.py --csv <file> --brief <file> --block-csv <file> --block-brief <file>`
+  runs the original live-source pipeline against HRM's open data. It is kept as the baseline the
+  mirror's derivation is reconciled against (`python3 src/mirror/reconcile_figures.py`), and it
+  has no default output paths.
+
+The `out/` directory, which held the last lists and standalone board the retired generator
+committed, has been removed: nothing regenerates those files, and they were never the product. The
+standalone board and its source, `web/template.html`, were removed too: the served page carries the
+same lists, map and triage, and the exports above replace the one thing the file did that a URL
+does not, being something you could mail or archive. The last commit that still has the `out/`
+files and the template is `b04731c`; read any of them with `git show b04731c:<path>`, for example
+`git show b04731c:out/watchlist.csv` or `git show b04731c:web/template.html`. Nothing runs on a schedule in this repository any more:
+the nightly workflow that committed to `out/` has been removed, and scheduled work moves to the
+deployment that serves the application.
 
 ## What it found
 

@@ -10,11 +10,24 @@ distinct vehicles were involved. An address with many calls, almost no tows,
 and a different vehicle nearly every time is an address where enforcement has
 already been tried and has not worked.
 
-Run:  python3 src/hotspots.py --violation Driveway
+Run:  python3 src/hotspots.py --violation Driveway \\
+          --csv DIR/watchlist.csv --brief DIR/watchlist.md \\
+          --block-csv DIR/blocks.csv --block-brief DIR/blocks.md
 
 The violation is matched as a substring, because HRM records the same problem
 under more than one label. A blocked driveway is filed as both
 "Blocking Driveway (DISPATCH)" and "DRIVEWAY".
+
+This is not the product. The product is the served application (`src/app/`,
+`design.md` M5), which reads the mirror, not the live service. This script
+survives as the live-source baseline that `src/mirror/reconcile_figures.py`
+reconciles the mirror-backed derivation against (tasks 4.9 and 9.4), and as the
+home of the pure functions `src/mirror/` imports (`build`, `roll_blocks`,
+`clean_address`, `to_local`, `write_csv`, and so on). It no longer writes to
+`out/` and no longer builds the standalone board: every output path is named on
+the command line, and there is no default. The board and its template
+(`web/template.html`) were retired under task 8.7; the last commit that still
+holds the template is b04731c, readable with `git show b04731c:web/template.html`.
 """
 
 import argparse
@@ -362,7 +375,7 @@ def write_brief(rows, calls, fields, violation, path, recur_days, latest):
         "",
         "Read the \"On this block\" column before you order a sign. Where it says 1, the",
         "doorway is alone and a marking or bollard fixes it. Where it says 5 or 10, the",
-        "block is the problem and out/blocks.md is the list to work from instead.",
+        "block is the problem and the block list is the one to work from instead.",
         "",
         "| # | Address | Calls 12mo | Calls all time | Tows | Distinct vehicles | Median gap | Last call | On this block | District |",
         "|---|---------|-----------:|---------------:|-----:|------------------:|-----------:|-----------|--------------:|----------|",
@@ -386,65 +399,6 @@ def write_brief(rows, calls, fields, violation, path, recur_days, latest):
     ]
     with open(path, "w") as fh:
         fh.write("\n".join(lines))
-
-
-def write_board(rows, blocks, calls, fields, latest, template, network, path):
-    """Fill the standalone board template with today's numbers.
-
-    The board is regenerated from the same run that writes the CSVs, so the page
-    a person opens can never disagree with the briefs sitting beside it.
-    """
-    keep_row = ("address", "calls_12mo", "calls_total", "district", "community", "owner",
-                "tows", "vehicles_seen", "vehicles_distinct", "median_gap_days",
-                "last_call", "street", "block", "block_doorways_calling", "lat", "lon")
-    page_rows = []
-    for i, r in enumerate(rows):
-        page_rows.append({
-            "i": i, "a": r["address"].title(), "d": str(r["district"] or "?"),
-            "c": (r["community"] or "").title(), "st": (r["street"] or "").title(),
-            "bk": r["block"] or "", "nb": r.get("block_doorways_calling", 1),
-            "m": r["calls_12mo"], "t": r["calls_total"], "w": r["tows"],
-            "vd": r["vehicles_distinct"], "vs": r["vehicles_seen"],
-            "g": None if r["median_gap_days"] is None else round(r["median_gap_days"]),
-            "l": r["last_call"], "o": r["owner"] or "",
-            "lat": round(r["lat"], 6), "lon": round(r["lon"], 6),
-        })
-    page_blocks = []
-    for i, b in enumerate(blocks):
-        page_blocks.append({
-            "i": i, "bk": b["block"], "s": b["streets"].title(), "n": b["doorways"],
-            "m": b["calls_12mo"], "t": b["calls_total"], "w": b["tows"],
-            "dw": b["dwellings"], "r": b["calls_per_1k_dwellings"],
-            "d": str(b["district"] or "?"), "worst": b["worst_doorway"].title(),
-            "addrs": [a.strip().title() for a in b["addresses"].split(";") if a.strip()],
-        })
-    with open(template) as fh:
-        page = fh.read()
-    with open(network) as fh:
-        net = fh.read()
-    # Header numbers come from the same run as the rows, never from the template.
-    total = len(calls)
-    tows = sum(1 for c in calls if fields[c["REQUEST_ID"]].get("Vehicle Was Towed") == "Y")
-    seen = sum(r["vehicles_seen"] for r in rows)
-    distinct = sum(r["vehicles_distinct"] for r in rows)
-    with_neighbour = sum(1 for r in rows if r.get("block_doorways_calling", 1) >= 2)
-    fills = {
-        "__LATEST__": latest.strftime("%Y-%m-%d"),
-        "__N_DOORWAYS__": f"{len(rows):,}",
-        "__N_BLOCKS__": f"{len(blocks):,}",
-        "__TOW_PCT__": f"{100 * tows / total:.1f}%" if total else "-",
-        "__UNIQUE_PCT__": f"{100 * distinct / seen:.0f}%" if seen else "-",
-        "__DISTINCT__": f"{distinct:,}",
-        "__SEEN__": f"{seen:,}",
-        "__WITH_NEIGHBOUR__": f"{with_neighbour:,}",
-        "__MAP__": net,
-        "__DATA__": json.dumps({"rows": page_rows, "blocks": page_blocks}, separators=(",", ":")),
-    }
-    for key, val in fills.items():
-        page = page.replace(key, val)
-    with open(path, "w") as fh:
-        fh.write(page)
-    return len(page)
 
 
 def write_block_brief(blocks, rows, path):
@@ -491,14 +445,13 @@ def main():
     ap.add_argument("--district", help="limit the brief to one district")
     ap.add_argument("--min-doorways", type=int, default=2,
                     help="minimum still-calling doorways for a block to be listed")
-    ap.add_argument("--csv", default="out/watchlist.csv")
-    ap.add_argument("--brief", default="out/watchlist.md")
-    ap.add_argument("--block-csv", default="out/blocks.csv")
-    ap.add_argument("--block-brief", default="out/blocks.md")
-    ap.add_argument("--board", default="out/triage-board.html",
-                    help="standalone page anyone can open in a browser")
-    ap.add_argument("--template", default="web/template.html")
-    ap.add_argument("--network", default="web/map-network.json")
+    # No default: the output location is always the caller's choice. These used
+    # to default to `out/`, which is how a bare run committed a list to the repo
+    # (task 8.7).
+    ap.add_argument("--csv", required=True, help="where to write the doorway list")
+    ap.add_argument("--brief", required=True, help="where to write the doorway brief")
+    ap.add_argument("--block-csv", required=True, help="where to write the block list")
+    ap.add_argument("--block-brief", required=True, help="where to write the block brief")
     args = ap.parse_args()
 
     calls, fields = load(args.violation)
@@ -523,12 +476,6 @@ def main():
     if blocks:
         write_csv(blocks, args.block_csv)
         write_block_brief(blocks, rows, args.block_brief)
-
-    try:
-        size = write_board(rows, blocks, calls, fields, latest, args.template, args.network, args.board)
-        print(f"wrote {args.board} ({size // 1024} KB)")
-    except FileNotFoundError as e:
-        print(f"skipped the board: {e.filename} is missing", file=sys.stderr)
 
     unmatched = sum(1 for r in rows if not r["block"])
     print(f"wrote {args.csv} and {args.brief} ({len(rows)} addresses)")
