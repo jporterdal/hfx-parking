@@ -5,6 +5,29 @@
 `dispatch-plan.md` holds the dependency DAG; this file holds *state* — what is done, what is in
 flight, and the conventions the pools have been run under.
 
+## IN FLIGHT — Pool 11 (read this before anything else if you are a new session)
+
+**Dispatched after commit of this note.** Two Sonnet workers, run in the background:
+- **Worker I** — fixes 9.2's four banner/API defects (concern 18) and 9.6's changed-time race (concern 19).
+  Owns `web/app/index.html`, `src/app/server.py`, the triage upsert (`src/mirror/triage.py` and/or
+  `schema.sql`), `tests/test_app.py` and the two test files holding the strict xfails
+  (`tests/test_verify_unreachable_and_overdue.py`, `tests/test_verify_shared_triage.py`), whose xfail
+  markers it removes as it fixes each defect.
+- **Worker J** — task 9.4: figures served for `Driveway` match the pre-change live-source run. Read-only
+  against the real mirror and public HRM; its only repo writes are a new offline test and its progress note.
+- **Progress notes:** each worker keeps `orchestration-progress/<worker>.md` (untracked, temporary; delete
+  the directory when you checkpoint) with what is done, files touched, test state and the exact next step.
+  **If the session was cut off, read those files, then `git status`/`git diff`, and verify before trusting.**
+  Uncommitted edits in the tree from these two workers are theirs, not stray.
+
+**Interruption protocol (user's request; the orchestrator cannot see the user's usage meter):** the user is
+watching their 5-hour usage limit and asked that, at about 95%, no new agents be dispatched and the
+session wrap up. The orchestrator cannot read that meter, so: (1) commit and update this file at every
+natural stopping point; (2) never dispatch a new pool without first committing a note like this block;
+(3) if the user says the limit is near, stop dispatching, let running workers finish or tell them to save
+and stop, verify the tree, tick only what is verified, commit, and say in the final message exactly what
+is left.
+
 ## Read this first, before doing anything else
 
 Verify before trusting anything below — an agent's report is a claim, not evidence:
