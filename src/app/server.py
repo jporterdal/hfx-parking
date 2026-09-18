@@ -63,8 +63,8 @@ Route table:
                                          `{checked_at, most_recent_call_date,
                                          last_success_at, last_attempt_at,
                                          next_due_at, behind_source,
-                                         stale_call_warning}` -- tasks
-                                         7.1/7.4a, see below
+                                         behind_reason, stale_call_warning}` --
+                                         tasks 7.1/7.2/7.4a, see below
 
 Every list is computed per request from the mirror via `mirror.derive.derive`
 (design.md M11) -- nothing here materializes a doorway or block list ahead of a
@@ -138,16 +138,20 @@ does not change what one request computes: it is still exactly one
 calls `derive_all()` or loops over `_SLUG_TO_CANONICAL` to answer one
 request.
 
-**Tasks 7.1/7.3/7.4a: freshness is served, not asserted.** `GET /api/freshness`
-is a thin wrapper over `mirror.status.mirror_freshness` (task 3.3's four
-clocks) and `mirror.status.layer_freshness`'s `behind_source` verdict (task
-3.4) -- nothing here recomputes what that module already derives from
-`layer_state`/`sync_runs`. The one addition is `_call_staleness`: a warning
-when the most recent call the mirror holds is materially older than the
-request's own clock (`STALE_CALL_WARNING_DAYS`, task 7.4a), which is not a
+**Tasks 7.1/7.3/7.4a/7.2: freshness is served, not asserted.** `GET
+/api/freshness` is a thin wrapper over `mirror.status.mirror_freshness` (task
+3.3's four clocks) and `mirror.status.layer_freshness`'s `behind_source`
+verdict (task 3.4) -- nothing here recomputes what that module already
+derives from `layer_state`/`sync_runs`. The one addition is `_call_staleness`:
+a warning when the most recent call the mirror holds is materially older than
+the request's own clock (`STALE_CALL_WARNING_DAYS`, task 7.4a), which is not a
 sync-health question `mirror.status` answers on its own -- a sync can be
 perfectly healthy against a source that has itself gone quiet for a month,
-and that is exactly the case this warns about.
+and that is exactly the case this warns about. `_behind_reason` (task 7.2) is
+the other half of "whose limit is it": it reads `layer_freshness`'s own
+per-layer `behind_reason` text back out of the aggregate so a viewer is told
+which system owns a lag -- HRM's publishing schedule, or this sync itself --
+rather than a bare `behind_source` boolean with no attribution.
 
 `web/app/index.html`'s header banner (`#freshness`) and footer
 (`#footer-sync-date`) fetch this route and are what makes 7.1's "last
@@ -373,6 +377,12 @@ def _doorway_payload(rows):
             "bk": r["block"] or "", "nb": r.get("block_doorways_calling", 1),
             "m": r["calls_12mo"], "t": r["calls_total"], "w": r["tows"],
             "vd": r["vehicles_distinct"], "vs": r["vehicles_seen"],
+            # Task 5.5c: the one figure the recurrence window (`recur_days`)
+            # governs (`hotspots.build()`'s `repeat_calls`) -- exposed so the
+            # claim that recur_days changes only this figure, never the
+            # listed set, is something a viewer (and a test, over real HTTP)
+            # can actually observe, not just something true internally.
+            "rp": r["repeat_calls"],
             "g": None if r["median_gap_days"] is None else round(r["median_gap_days"]),
             "l": r["last_call"], "o": r["owner"] or "",
             "lat": None if r["lat"] is None else round(r["lat"], 6),
@@ -473,11 +483,38 @@ def _call_staleness(most_recent_call_date, now=None):
     }
 
 
+def _behind_reason(freshness):
+    """Task 7.2: attribute `behind_source`'s aggregate verdict to whichever
+    system owns it, by reusing `mirror.status.layer_freshness`'s own
+    per-layer `behind_reason` rather than recomputing the wording here.
+
+    A currency layer (`mirror.status.CURRENCY_LAYERS`) that is behind means
+    HRM has published something this sync has not yet pulled -- this
+    system's own problem. None behind means the source simply has not
+    published anything new -- a limit of HRM's publishing schedule, not a
+    sync defect (this is the *other* half of the distinction `_call_staleness`
+    draws for the data clock; this one is for the sync clock). Mirrors
+    `mirror_freshness`'s own aggregation: any one currency layer behind is
+    enough to call the whole mirror behind (design.md M3 treats the two
+    Cityworks layers as one publish event four minutes apart), so a viewer
+    does not need to know which layer specifically.
+    """
+    currency = [
+        freshness["layers"][key] for key in status.CURRENCY_LAYERS
+        if key in freshness["layers"] and freshness["layers"][key].get("known")
+    ]
+    behind = next((v for v in currency if v["behind_source"]), None)
+    if behind is not None:
+        return behind["behind_reason"]
+    not_behind = next((v for v in currency if not v["behind_source"]), None)
+    return not_behind["behind_reason"] if not_behind else None
+
+
 def _freshness_payload(freshness, now=None):
     """The `GET /api/freshness` JSON body: a thin reshaping of
     `mirror.status.mirror_freshness`'s dict (every field except
-    `stale_call_warning` is read off it, not recomputed), with every
-    timestamp normalized through `_iso_utc`.
+    `stale_call_warning` and `behind_reason` is read off it, not recomputed),
+    with every timestamp normalized through `_iso_utc`.
     """
     now = now or datetime.datetime.now(datetime.timezone.utc)
     return {
@@ -487,6 +524,7 @@ def _freshness_payload(freshness, now=None):
         "last_attempt_at": _iso_utc(freshness["last_attempt_at"]),
         "next_due_at": _iso_utc(freshness["next_due_at"]),
         "behind_source": freshness["behind_source"],
+        "behind_reason": _behind_reason(freshness),
         "stale_call_warning": _call_staleness(freshness["most_recent_call_date"], now=now),
     }
 
@@ -737,12 +775,12 @@ def create_app(conn_factory=None):
     @app.get("/api/freshness")
     def freshness():
         """Tasks 7.1/7.3/7.4a: the four clocks design.md M4 names, plus 7.4a's
-        stale-call warning -- see this module's docstring and
-        `_freshness_payload`'s for the shape and the timezone-normalization
-        rationale. `web/app/index.html`'s header banner and footer read this
-        on every view; no route parameter, no per-type distinction -- the
-        mirror has one set of these clocks regardless of which canonical type
-        a viewer is looking at.
+        stale-call warning and 7.2's `behind_reason` attribution -- see this
+        module's docstring and `_freshness_payload`'s for the shape and the
+        timezone-normalization rationale. `web/app/index.html`'s header
+        banner and footer read this on every view; no route parameter, no
+        per-type distinction -- the mirror has one set of these clocks
+        regardless of which canonical type a viewer is looking at.
         """
         conn = connect()
         try:

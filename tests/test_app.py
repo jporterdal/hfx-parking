@@ -17,6 +17,7 @@ something worth re-running on every `pytest` invocation.
 
 import datetime
 import json
+import re
 
 import pytest
 
@@ -235,6 +236,113 @@ def test_tow_thesis_reads_stored_figures_not_a_frozen_number(client):
     assert "not yet available" in body
 
 
+def test_tow_thesis_conclusion_varies_by_stored_conclusion_key(client):
+    """Task 7.5's judgment call: 5.8 left the tow-thesis sentence a fixed
+    template ("A tow does not lower the chance a doorway calls again") with
+    only the two recurrence percentages substituted per type, even though
+    `mirror.per_type` stores a `tow.conclusion_key` (tow_lower/tow_higher/
+    no_difference/sample_too_small) that does not always match that framing --
+    a type whose interval actually rules "higher" would have been described as
+    "does not lower" regardless. This is now read from the stored
+    `tow.conclusion` fragment itself (already phrased correctly per key by
+    `mirror.per_type._tow_conclusion`), not rebuilt from a template here.
+
+    No browser exists in this environment to execute the script and observe
+    the rendered text for each key (that would need a running mirror with
+    types seeded to each of the four conclusions); this pins what does not
+    need one -- that the old fixed leading clause is gone, that the script
+    reads the structured fields a varying conclusion requires, and that the
+    caveat these fields carry (`tow.caveat`, task 4.12) is rendered alongside
+    a substantive conclusion but not a `sample_too_small` one, matching
+    `mirror.per_type._type_conclusion`'s own choice.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert "A tow does not lower the chance a doorway calls again" not in body
+    assert "tow.conclusion_key" in body
+    assert "tow.conclusion" in body
+    assert "tow.caveat" in body
+    assert '"sample_too_small"' in body
+
+
+def test_interpretation_limits_are_footnoted_at_every_figure_they_qualify(client):
+    """Task 7.5: the six interpretation limits (intake clock, tow as the only
+    recorded outcome, vehicle identity as a floor, text-address reduction,
+    derived block labels, block-wide dwelling rate) survive being served, but
+    5.8/design.md M8 only ever stated them generically in the footer -- a
+    viewer who never scrolls that far never sees them, even though they
+    qualify the headline stats and thesis sentence shown above the fold under
+    every one of the 30 routed types (`ORCHESTRATION-HANDOFF.md`'s "wider
+    Driveway narrative" concern).
+
+    Each limit now has a real, visible, keyboard-and-touch-reachable `<a
+    class="lim" href="#lim-...">` next to the figure it bears on -- not just a
+    hover-only `title` (task 7.6's own note flags hover-only text as invisible
+    on touch and to keyboard users) -- landing on a matching `id="lim-...""`
+    in the footer's "Read these numbers carefully" section. This checks both
+    ends of each link exist, for every one of the six limits, and that each
+    footnoted figure/sentence this task names is covered: the doorways-still-
+    calling and blocks-with-2+-calling stats, the tow and vehicle-uniqueness
+    stats, and the tow-thesis and block-doorways-calling sentences.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    lim_ids = [
+        "lim-intake", "lim-tow", "lim-vehicle", "lim-address",
+        "lim-block-label", "lim-dwelling",
+    ]
+    for lim_id in lim_ids:
+        href_count = body.count(f'href="#{lim_id}"')
+        assert href_count >= 1, f"no footnote link points at #{lim_id}"
+        assert f'id="{lim_id}"' in body, f"footer has no target for #{lim_id}"
+
+    # The stats a viewer sees without expanding "Why blocks? Read the
+    # analysis" each carry at least one footnote of their own.
+    assert 'id="n-doorways-stat"' in body
+    assert re.search(
+        r'id="n-doorways-stat">[^<]*</span><span class="k">doorways still calling'
+        r'</span>(<a class="lim"[^>]*>\[[^\]]+\]</a>){2}',
+        body,
+    ), "doorways-still-calling stat carries no footnote link"
+    assert re.search(
+        r'id="n-blocks-stat">[^<]*</span><span class="k">blocks with 2\+ calling'
+        r'</span>(<a class="lim"[^>]*>\[[^\]]+\]</a>){2}',
+        body,
+    ), "blocks-with-2+-calling stat carries no footnote link"
+    assert re.search(
+        r'id="tow-pct-stat">[^<]*</span><span class="k">ended in a tow'
+        r'</span><a class="lim"[^>]*href="#lim-tow"',
+        body,
+    ), "tow-rate stat carries no footnote link to the tow-as-only-outcome limit"
+    assert re.search(
+        r'id="unique-pct-stat">[^<]*</span><span class="k">of vehicles unique'
+        r'</span><a class="lim"[^>]*href="#lim-vehicle"',
+        body,
+    ), "uniqueness stat carries no footnote link to the vehicle-floor limit"
+
+    # The thesis sentence's tow clause and its "distinct cars"/"block where a
+    # neighbour is also still calling" clauses each carry their own footnote,
+    # rather than the page relying on the footer alone.
+    assert re.search(r'id="tow-thesis"[^<]*</span><a class="lim"[^>]*href="#lim-tow"', body)
+    assert re.search(
+        r'recorded vehicles were different cars</b><a class="lim"[^>]*href="#lim-vehicle"',
+        body,
+    )
+    assert re.search(
+        r'also still calling</b>(<a class="lim"[^>]*>\[[^\]]+\]</a>){2}',
+        body,
+    ), "the block-doorways-calling sentence carries no footnote link"
+
+    # Each footer entry states the limit in terms a reader does not need the
+    # rest of the page to understand.
+    assert "logged the call" in body            # lim-intake
+    assert "no recorded outcome" in body         # lim-tow (already present pre-7.5)
+    assert "undercount" in body                  # lim-vehicle
+    assert "different ways by HRM" in body        # lim-address
+    assert "not a boundary HRM" in body          # lim-block-label
+    assert "whole census block" in body          # lim-dwelling
+
+
 def test_index_is_reachable_with_a_bare_client_no_headers(client):
     """'No install, no account, no credential' (spec.md) -- a request carrying
     nothing but a path succeeds."""
@@ -309,9 +417,13 @@ def test_doorways_api_returns_seeded_rows_for_the_default_type(client, clean_db)
     assert addresses == {"1 First St", "2 Second St"}  # hotspots.clean_address + .title()
     # Same abbreviated-key shape write_board's page_rows uses, so
     # web/app/index.html's script (copied from web/template.html) needs no change.
+    # "rp" (repeat_calls) is one addition beyond that shape, task 5.5c's own:
+    # the one figure the recurrence window governs, exposed so a viewer (and
+    # a test, over real HTTP) can observe recur_days changing it without
+    # changing the listed set.
     assert set(data["rows"][0]) == {
         "i", "a", "d", "c", "st", "bk", "nb", "m", "t", "w", "vd", "vs", "g", "l",
-        "o", "lat", "lon",
+        "o", "lat", "lon", "rp",
     }
     towed_row = next(r for r in data["rows"] if r["a"] == "1 First St")
     assert towed_row["w"] == 1  # one of its two calls was towed
@@ -476,6 +588,88 @@ def test_recur_days_query_param_is_distinct_from_recency_days_over_http(client, 
     assert wide["rows"][0]["m"] == narrow["rows"][0]["m"]  # calls_12mo unaffected
     assert wide["rows"][0]["g"] is not None  # median_gap_days: repeat visible either way
     assert narrow["filters"]["recur_days"] == 10
+
+
+def seed_recency_vs_recurrence_fixture(conn):
+    """Task 5.5c's own fixture shape: two doorways, "9 Far St" with calls
+    only 50-55 days back and "1 Near St" with calls only 0-5 days back --
+    "one with calls only within a narrow recency window and one with calls
+    further back," in the task's own words.
+    """
+    insert_census_area(conn, "12090999", SQUARE_RING)
+    seed_driveway_call(conn, 7001, "9 FAR ST, HALIFAX", LATEST - datetime.timedelta(days=50))
+    seed_driveway_call(conn, 7002, "9 FAR ST, HALIFAX", LATEST - datetime.timedelta(days=55))
+    seed_driveway_call(conn, 7003, "1 NEAR ST, HALIFAX", LATEST)
+    seed_driveway_call(conn, 7004, "1 NEAR ST, HALIFAX", LATEST - datetime.timedelta(days=5))
+
+
+def test_recency_vs_recurrence_windows_govern_different_things_over_http(client, clean_db):
+    """Task 5.5c: the toolbar's two windows share a 365-day default and read
+    as near-synonyms at a glance, but govern different things (design.md
+    M11) -- proven here over real HTTP (not by calling
+    `derive_with_recency()`/`hotspots.build()` directly), not assumed from
+    the algebra:
+
+    - narrowing `recency_days` below 50 drops "9 Far St" from the listed set
+      entirely -- it changes *which* doorways are listed;
+    - narrowing `recur_days` below the 5-day gap between "1 Near St"'s two
+      calls changes only that doorway's own repeat figure (`rp`,
+      `hotspots.build()`'s `repeat_calls`, exposed on the doorway payload for
+      exactly this) from 1 to 0 -- the listed set (both doorways, same two
+      addresses) and "1 Near St"'s own `calls_12mo` (`m`, recency's figure)
+      are unchanged.
+    """
+    seed_recency_vs_recurrence_fixture(clean_db)
+
+    default_resp = client.get("/api/types/blocking-driveway/doorways?min_calls=1").get_json()
+    assert sorted(r["a"] for r in default_resp["rows"]) == ["1 Near St", "9 Far St"]
+
+    narrow_recency = client.get(
+        "/api/types/blocking-driveway/doorways?min_calls=1&recency_days=20"
+    ).get_json()
+    assert [r["a"] for r in narrow_recency["rows"]] == ["1 Near St"]
+
+    wide_recur = client.get(
+        "/api/types/blocking-driveway/doorways?min_calls=1&recur_days=365"
+    ).get_json()
+    narrow_recur = client.get(
+        "/api/types/blocking-driveway/doorways?min_calls=1&recur_days=1"
+    ).get_json()
+
+    # recur_days never changes the listed set.
+    assert sorted(r["a"] for r in wide_recur["rows"]) == ["1 Near St", "9 Far St"]
+    assert sorted(r["a"] for r in narrow_recur["rows"]) == ["1 Near St", "9 Far St"]
+
+    near_wide = next(r for r in wide_recur["rows"] if r["a"] == "1 Near St")
+    near_narrow = next(r for r in narrow_recur["rows"] if r["a"] == "1 Near St")
+    assert near_wide["rp"] == 1  # the two calls are 5 days apart, within a 365-day window
+    assert near_narrow["rp"] == 0  # ... but not within a 1-day recurrence window
+    assert near_wide["m"] == near_narrow["m"]  # calls_12mo (recency's own figure) unaffected
+
+
+def test_filters_combination_that_excludes_everything_returns_200_with_empty_rows_not_an_error(
+    client, clean_db
+):
+    """Task 5.5e, the server half of "distinguishable from a failure": a
+    filter combination that matches nothing is a normal, successful response
+    -- 200, an empty `rows` list, the `filters` actually in effect -- never a
+    4xx/5xx that a network failure or a bug would also produce.
+    `web/app/index.html`'s render()/filterSummary() reads exactly this shape
+    to name the values that excluded everything (see the page-shape test
+    alongside this one).
+    """
+    seed_two_doorway_block(clean_db)  # both doorways are in district "7"
+
+    resp = client.get("/api/types/blocking-driveway/doorways?district=9&min_calls=1")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["rows"] == []
+    assert data["count"] == 0
+    assert data["filters"] == {
+        "district": "9", "min_calls": 1, "min_doorways": 2,
+        "recur_days": 365, "recency_days": 365,
+    }
 
 
 def test_a_malformed_filter_value_falls_back_to_the_default_rather_than_500ing(client, clean_db):
@@ -1088,6 +1282,64 @@ def test_index_page_rolls_back_an_optimistic_decision_on_a_failed_save(client):
     assert "return false;" in body
 
 
+# ------------------------------------------------- filter controls (5.5c/5.5e/7.4)
+
+
+def test_index_page_labels_recency_and_recurrence_windows_distinctly(client):
+    """Task 5.5c: the bare labels alone ("Recency window (days)" /
+    "Recurrence window (days)") read as near-synonyms at a glance and share
+    a 365-day default (design.md M11) -- a `title` hover hint on each states,
+    in different words, exactly what that control alone governs, so a
+    viewer is not left to guess which one changes the list and which one
+    only changes a count. The behavioural half of this task is proven over
+    HTTP by test_app.py's
+    test_recency_vs_recurrence_windows_govern_different_things_over_http,
+    not by this page-shape check.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert 'for="recency-days" title="Which doorways are listed at all' in body
+    assert 'for="recur-days" title="How a repeat call is counted' in body
+
+
+def test_index_page_names_the_filters_in_effect_when_a_combination_lists_nothing(client):
+    """Task 5.5e: an empty filter result says so plainly and names the
+    values that excluded everything (`district X`, `min. recent calls >=
+    N`, ...) via `filterSummary()`, reading `FILTERS` -- the same `filters`
+    key the doorways/blocks routes echo back (see
+    test_filters_combination_that_excludes_everything_returns_200_with_empty_rows_not_an_error
+    for the server side of this). That wording must not collide with the
+    two genuine-failure messages boot() already shows for a dropped
+    connection or a non-2xx response -- three distinct situations get three
+    distinct sentences, so an empty list from a narrow filter is never
+    mistaken for either kind of failure.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert "function filterSummary(){" in body
+    assert "No ${noun} match ${filterSummary()}." in body
+    assert "Widen a filter above and Apply filters again." in body
+    assert "Could not reach the server. Check your connection and reload." in body
+    assert "The server could not produce this list just now. Reload to try again." in body
+
+
+def test_index_page_states_the_recency_windows_anchor_date_and_length(client):
+    """Task 7.4: every filtered list states the recency window's length
+    (`FILTERS.recency_days`) and the date it is measured from -- the
+    mirror's true latest call date (`doorPayload.latest`, not "now" and not
+    the shifted value `mirror.derive_recency` feeds internally to
+    `hotspots.build()`) -- wired to a dedicated `#recency-note` element next
+    to `#showing` so it appears on every list, not only an empty one.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert 'id="recency-note"' in body
+    assert (
+        "Showing calls from the last ${FILTERS.recency_days} days, "
+        "since ${doorPayload.latest}." in body
+    )
+
+
 # --------------------------------------------------------- type figures (5.7/5.8)
 
 
@@ -1191,7 +1443,8 @@ def test_freshness_route_reports_the_four_clocks(client, clean_db):
     payload = resp.get_json()
     assert set(payload) == {
         "checked_at", "most_recent_call_date", "last_success_at",
-        "last_attempt_at", "next_due_at", "behind_source", "stale_call_warning",
+        "last_attempt_at", "next_due_at", "behind_source", "behind_reason",
+        "stale_call_warning",
     }
     # Parsed back to the same instant regardless of the offset the string
     # carries -- this is the check that would have caught the discarded
@@ -1265,6 +1518,97 @@ def test_freshness_does_not_warn_when_the_newest_call_is_recent(client, clean_db
     assert warning["known"] is True
     assert warning["stale"] is False
     assert warning["reason"] is None
+
+
+# --------------------------------------------------------- 7.2 lag attribution
+
+
+def insert_pulled_edit(conn, layer, source_last_edit, finished_at=None, ok=True):
+    """Write one `sync_runs` row directly, so `mirror.status.last_pulled_source_edit`
+    reports a *pull* that saw an older source edit than `layer_state`'s -- the
+    shape a poll-saw-an-advance-but-the-reload-hasn't-landed-yet sync leaves
+    behind. Mirrors `test_derive.py`'s own `insert_sync_run` helper rather than
+    running a real `sync.py` sync (this file's `set_layer_state` already
+    prefers writing the state directly for the same reason)."""
+    finished_at = finished_at or source_last_edit
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO sync_runs (kind, layer, started_at, finished_at, ok, "
+            "source_last_edit) VALUES (%s, %s, %s, %s, %s, %s)",
+            ("reload", layer, finished_at, finished_at, ok, source_last_edit),
+        )
+    conn.commit()
+
+
+def test_lag_attributed_to_hrm_when_sync_is_healthy_but_source_has_gone_quiet(
+        client, clean_db):
+    """The scenario 7.2 names first: a sync that is polling on schedule and
+    succeeding every time, against a source that simply stopped publishing
+    weeks ago. `behind_source` must read False (this system is not at fault)
+    while the wording attributes the resulting gap to HRM's own publishing
+    schedule, not to a defect in this sync -- easy to get backwards, so both
+    the boolean and the attributed reason are checked, not just one."""
+    now = datetime.datetime.now(datetime.UTC)
+    quiet_edit = now - datetime.timedelta(days=30)
+    recent_poll = now - datetime.timedelta(hours=1)
+    for layer in ("service_requests", "custom_fields"):
+        set_layer_state(clean_db, layer, source_last_edit=quiet_edit,
+                         last_attempt_at=recent_poll, last_attempt_ok=True,
+                         last_success_at=recent_poll)
+    seed_driveway_call(clean_db, 9004, "1 FIRST ST, HALIFAX", quiet_edit)
+
+    payload = client.get("/api/freshness").get_json()
+
+    assert payload["behind_source"] is False
+    assert payload["stale_call_warning"]["stale"] is True
+    assert "HRM's publishing schedule" in payload["behind_reason"]
+    assert "not to this sync" in payload["behind_reason"]
+
+
+def test_lag_attributed_to_this_system_when_sync_has_fallen_behind_a_publish(
+        client, clean_db):
+    """The other scenario 7.2 names: HRM has published more recently than this
+    mirror has pulled -- the poll noticed the advance (`layer_state.source_last_edit`
+    moved) but the last successful *pull* (`sync_runs`) is still against the
+    older edit. This is this system's own problem, not HRM's, and the wording
+    must say so rather than reusing the HRM-schedule phrasing from the other
+    scenario."""
+    now = datetime.datetime.now(datetime.UTC)
+    old_edit = now - datetime.timedelta(days=2)
+    new_edit = now - datetime.timedelta(hours=1)
+    for layer in ("service_requests", "custom_fields"):
+        set_layer_state(clean_db, layer, source_last_edit=old_edit,
+                         last_attempt_at=old_edit, last_attempt_ok=True,
+                         last_success_at=old_edit)
+        insert_pulled_edit(clean_db, layer, old_edit)
+    # The poll's most recent observation moved past what was ever pulled --
+    # only service_requests needs to advance for the aggregate to be behind.
+    set_layer_state(clean_db, "service_requests", source_last_edit=new_edit,
+                     last_attempt_at=new_edit, last_attempt_ok=True,
+                     last_success_at=old_edit)
+    seed_driveway_call(clean_db, 9005, "1 FIRST ST, HALIFAX", now - datetime.timedelta(hours=2))
+
+    payload = client.get("/api/freshness").get_json()
+
+    assert payload["behind_source"] is True
+    assert payload["stale_call_warning"]["stale"] is False
+    assert "published" in payload["behind_reason"]
+    assert "HRM's publishing schedule" not in payload["behind_reason"]
+
+
+def test_served_page_attributes_lag_to_the_owning_system_in_both_directions(client):
+    """Task 7.2's wording lives in `web/app/index.html`'s boot() fetch, which
+    Python tests cannot execute -- so this pins the two attributed sentences
+    as static text in the served script, the same way
+    `test_served_page_fetches_freshness_and_no_longer_asserts_liveness` pins
+    7.3's markers. Both phrasings must be present and distinct: one blames
+    HRM's own publishing schedule, the other blames this mirror, and neither
+    should be interchangeable with the other."""
+    body = client.get("/").get_data(as_text=True)
+
+    assert "of HRM's own publishing schedule, not a problem with this mirror" in body
+    assert "This mirror has fallen behind HRM" in body
+    assert "not to HRM's publishing schedule" in body
 
 
 def test_freshness_route_is_reachable_with_no_type_scoping(client):

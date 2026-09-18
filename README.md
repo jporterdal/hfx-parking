@@ -13,8 +13,8 @@ This finds the doorways where enforcement has already been tried and has not wor
 no account. It carries the 71 blocks, the 363 doorways, and a zoomable map of Halifax drawn from
 HRM's own street network, and it remembers your triage decisions in your browser.
 
-The hosted copy shares those decisions with everyone who opens it, so a team triages one list
-instead of three.
+The served application persists those decisions in the mirror's own database, so anyone who
+visits its URL sees the same triage state, and a team works one shared list instead of three.
 
 ## Run it
 

@@ -143,7 +143,12 @@ footer h3{font-family:"Barlow Condensed",sans-serif;font-size:14px;letter-spacin
    next expected one are visible without being sought (task 7.1). */
 .freshness{margin:0 0 18px;padding:8px 13px;border:1px solid var(--line-2);border-radius:3px;
   font-size:13px;color:var(--ink-2);background:var(--surface-2);max-width:74ch}
-.freshness.stale{border-color:var(--alert);background:var(--alert-soft);color:var(--ink)}
+/* .behind: task 7.2's this-system-is-behind case, same alert treatment as
+   .stale (7.4a's HRM-has-gone-quiet case) -- both are lags worth flagging
+   visually, and the two states are mutually exclusive in the boot() fetch
+   below, so styling them alike does not blur the wording that tells them
+   apart. */
+.freshness.stale,.freshness.behind{border-color:var(--alert);background:var(--alert-soft);color:var(--ink)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
 /* ---- map ---- */
@@ -198,6 +203,25 @@ canvas#cv{display:block;width:100%;height:100%}
   .research{margin-top:12px;max-width:74ch}
   .research summary{cursor:pointer;color:var(--ink-2);font-size:14px;width:fit-content}
   .research .thesis{font-size:15px;margin:12px 0 0}
+  /* Task 7.5: footnote-style links from a figure to the interpretation limit
+     it carries (design.md M8: "every interpretation limit the sibling change
+     established" survives the move to a mirror). A real, focusable <a> with
+     visible bracketed text, not a bare `title` -- 7.6's own task note flags
+     hover-only text as invisible on touch and to keyboard users, and these
+     limits sit under the page's most-repeated figures (shown under all 30
+     routed types), so a reachable link earns its keep even though 7.6 judged
+     a `title` enough for the single block-neighbour count elsewhere on this
+     page. Each points at a matching `<li id="lim-...">` in the footer's
+     "Read these numbers carefully" section. */
+  .lim{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.02em;
+    color:var(--muted);text-decoration:none;border-bottom:1px dotted var(--muted);
+    white-space:nowrap;margin-right:6px}
+  .lim:hover,.lim:focus-visible{color:var(--accent);border-color:var(--accent)}
+  .stat .lim{display:block;margin:4px 0 0}
+  .limits{margin:10px 0 0;padding-left:1.3em}
+  .limits li{margin:0 0 8px;max-width:70ch}
+  .limits li:target{background:var(--accent-soft);border-radius:3px;
+    box-shadow:0 0 0 4px var(--accent-soft)}
   .stat{padding:10px 14px}
   .banner{margin-top:16px}
   .toolbar{margin:18px 0;display:grid;gap:12px}
@@ -310,18 +334,18 @@ canvas#cv{display:block;width:100%;height:100%}
   <h1>Blocks, not doorways</h1>
   <details class="research">
   <summary>Why blocks? Read the analysis</summary>
-  <p class="thesis"><span id="tow-thesis">Tow-effect comparison for this type: &hellip;</span>
-  Across these addresses <b><span id="distinct-count">&hellip;</span> of <span id="seen-count">&hellip;</span> recorded vehicles were different cars</b>. There is no repeat offender to
+  <p class="thesis"><span id="tow-thesis">Tow-effect comparison for this type: &hellip;</span><a class="lim" href="#lim-tow" title="Read: tow is the only recorded outcome, and the comparison is observational">[tow outcome]</a>
+  Across these addresses <b><span id="distinct-count">&hellip;</span> of <span id="seen-count">&hellip;</span> recorded vehicles were different cars</b><a class="lim" href="#lim-vehicle" title="Read: vehicle identity is a floor, not a plate">[vehicle id]</a>. There is no repeat offender to
   deter, so the street is producing the violation. And <b><span id="with-neighbour-count">&hellip;</span> of the <span id="n-doorways-thesis">&hellip;</span> doorways sit on a block where a neighbour is
-  also still calling</b>, which means most of these are not a sign at one address. They are one block-wide problem
-  counted many times.</p>
+  also still calling</b><a class="lim" href="#lim-address" title="Read: addresses are matched as text, not geocoded">[addresses]</a><a class="lim" href="#lim-block-label" title="Read: a block's street label is derived, not official">[block label]</a>, which means most of these are not a sign at one address. They are one block-wide problem
+  counted many times.<a class="lim" href="#lim-dwelling" title="Read: the dwelling rate covers the whole block">[dwelling rate]</a></p>
   </details>
   </div>
   <div class="stats">
-    <div class="stat"><span class="n" id="n-doorways-stat">&hellip;</span><span class="k">doorways still calling</span></div>
-    <div class="stat"><span class="n" id="n-blocks-stat">&hellip;</span><span class="k">blocks with 2+ calling</span></div>
-    <div class="stat"><span class="n" id="tow-pct-stat">&hellip;</span><span class="k">ended in a tow</span></div>
-    <div class="stat"><span class="n" id="unique-pct-stat">&hellip;</span><span class="k">of vehicles unique</span></div>
+    <div class="stat"><span class="n" id="n-doorways-stat">&hellip;</span><span class="k">doorways still calling</span><a class="lim" href="#lim-intake" title="Read: dates are intake, not condition">[dates]</a><a class="lim" href="#lim-address" title="Read: addresses are matched as text, not geocoded">[addresses]</a></div>
+    <div class="stat"><span class="n" id="n-blocks-stat">&hellip;</span><span class="k">blocks with 2+ calling</span><a class="lim" href="#lim-block-label" title="Read: a block's street label is derived, not official">[block label]</a><a class="lim" href="#lim-dwelling" title="Read: the dwelling rate covers the whole block">[dwelling rate]</a></div>
+    <div class="stat"><span class="n" id="tow-pct-stat">&hellip;</span><span class="k">ended in a tow</span><a class="lim" href="#lim-tow" title="Read: tow is the only recorded outcome">[tow outcome]</a></div>
+    <div class="stat"><span class="n" id="unique-pct-stat">&hellip;</span><span class="k">of vehicles unique</span><a class="lim" href="#lim-vehicle" title="Read: vehicle identity is a floor, not a plate">[vehicle id]</a></div>
   </div>
   </div>
   <div class="banner" id="dbstate" role="status" hidden></div>
@@ -369,10 +393,24 @@ canvas#cv{display:block;width:100%;height:100%}
     <label class="district-filter" for="min-doorways"><span class="filter-label">Min. calling doorways/block</span>
       <input type="number" id="min-doorways" min="0" step="1" inputmode="numeric">
     </label>
-    <label class="district-filter" for="recency-days"><span class="filter-label">Recency window (days)</span>
+    <!-- Task 5.5c: bare labels ("Recency window" / "Recurrence window") read
+         as near-synonyms at a glance, and both share the same 365-day
+         default (design.md M11), so a viewer could easily assume they are
+         one control split in two. The `title` hover hint on each states in
+         one sentence what that control alone governs, in the same words a
+         second control's hint uses to state the other -- following 7.6's
+         precedent of a `title` attribute for "explain a number before
+         acting" (thinner on touch/keyboard than a visible line would be, per
+         that task's own note, but not contradicted by anything this task
+         asks for). The behavioural half -- that adjusting one changes the
+         listed set and the other changes only the repeat figure -- is
+         verified over HTTP in tests/test_app.py, not just claimed here. -->
+    <label class="district-filter" for="recency-days" title="Which doorways are listed at all: narrowing this can remove a doorway from the list, not just reorder it.">
+      <span class="filter-label">Recency window (days)</span>
       <input type="number" id="recency-days" min="1" step="1" inputmode="numeric">
     </label>
-    <label class="district-filter" for="recur-days"><span class="filter-label">Recurrence window (days)</span>
+    <label class="district-filter" for="recur-days" title="How a repeat call is counted, once a doorway is already listed: narrowing this only changes the repeat figure -- it never adds or removes a doorway from the list.">
+      <span class="filter-label">Recurrence window (days)</span>
       <input type="number" id="recur-days" min="1" step="1" inputmode="numeric">
     </label>
     <button type="button" class="clear-filters" id="apply-filters">Apply filters</button>
@@ -416,6 +454,14 @@ canvas#cv{display:block;width:100%;height:100%}
 <section class="table-panel" aria-label="Triage results">
   <div class="table-tools">
     <span class="count" id="showing" aria-live="polite"></span>
+    <!-- Task 7.4: the recency window's length and anchor date, on every
+         filtered list -- not just when a viewer has touched the toolbar,
+         since the default (365 days) is itself a window, per design.md M11.
+         Filled in render() from FILTERS.recency_days and doorPayload.latest
+         (the mirror's true latest call date, not the shifted value
+         `derive_recency` feeds `hotspots.build()` -- see that module's own
+         docstring on why the two differ). -->
+    <span class="count" id="recency-note"></span>
     <label for="sort">Sort by <select id="sort" aria-label="Sort the list"></select></label>
   </div>
 <div class="rows">
@@ -438,14 +484,32 @@ canvas#cv{display:block;width:100%;height:100%}
   <p>Drawn from HRM's own Street Network layer, 10,599 street segments, and from the census block outlines. It is
   vector, not tiles, so it works with no external service and zooms without pixelating. Street names appear as you
   zoom in.</p>
-  <h3>Read these numbers carefully</h3>
-  <p>HRM publishes no ticketing field. A tow is the only enforcement outcome in the data, so a call with no tow is a
-  call with <em>no recorded outcome</em>, not proof that nothing happened. The tow comparison is observational: tows
-  may cluster at the worst addresses, which would hide a real effect. Vehicle identity is make, model and colour, not
-  a plate, so two identical cars count as one and the unique count is a floor. Addresses are matched as text, not
-  geocoded, so one doorway can split across two rows. A block's street label is derived from the doorways on this
-  list, not from an official name, and its dwelling count covers the whole block rather than the street the calls sit
-  on.</p>
+  <h3 id="read-carefully">Read these numbers carefully</h3>
+  <p>Six limits run under the figures on this page. Each is linked from the number or sentence it qualifies -- a
+  small <code>[bracketed]</code> link next to the figure -- rather than stated only here, where a viewer who never
+  scrolls this far would never see it.</p>
+  <ol class="limits">
+    <li id="lim-intake"><b>Dates are intake, not condition.</b> Every "still calling" count and every recency or
+    recurrence window is measured from the date HRM logged the call, not from when the underlying condition began or
+    ended. A doorway can read as active weeks after whatever was blocking it is gone, or as quiet simply because
+    nobody has called it in yet.</li>
+    <li id="lim-tow"><b>Tow is the only recorded outcome.</b> HRM publishes no ticketing field. A call with no tow is
+    a call with <em>no recorded outcome</em>, not proof that nothing happened. The tow comparison itself is
+    observational, not a randomized trial: tows may cluster at the addresses already calling the most, which could
+    mask a real effect in either direction.</li>
+    <li id="lim-vehicle"><b>Vehicle identity is a floor.</b> A vehicle is recorded as make, model and colour, not a
+    plate, so two identical cars at the same address count as one. The unique-vehicle share this page shows can only
+    ever be an undercount of the true number of distinct cars, never an overcount.</li>
+    <li id="lim-address"><b>Addresses are matched as text, not geocoded.</b> The same physical doorway logged two
+    different ways by HRM becomes two rows here; two different doorways logged identically become one. Counts of
+    doorways, and anything built on top of them, inherit that split-or-merge risk.</li>
+    <li id="lim-block-label"><b>A block's street label is derived, not official.</b> It names whichever street the
+    calling doorways on this list happen to share -- not a boundary HRM, the census or the city assigns. Two blocks
+    that look identically labelled are not guaranteed to be the same official area, and the reverse.</li>
+    <li id="lim-dwelling"><b>The dwelling rate is block-wide.</b> A block's dwelling count, and any per-1,000-dwellings
+    rate built from it, covers every dwelling in the whole census block -- not just the street frontage the calls
+    actually sit on. A block that wraps two streets counts dwellings from both against calls logged on only one.</li>
+  </ol>
   <h3>Source</h3>
   <p>HRM Open Data, <a href="https://data-hrm.hub.arcgis.com" target="_blank" rel="noopener">data-hrm.hub.arcgis.com</a>,
   mirrored into this application's own store rather than queried live per request (design.md M1).
@@ -525,6 +589,15 @@ const doorPayload = await doorRes.json();
 const blockPayload = await blockRes.json();
 const DATA = {rows: doorPayload.rows, blocks: blockPayload.blocks};
 const ROWS = DATA.rows, BLOCKS = DATA.blocks;
+/* Tasks 5.5e/7.4: the filter values this response was actually computed from
+ * (src/app/server.py's `_filters_from_request`, echoed back on both the
+ * doorway and block payloads identically -- one type's single request cycle
+ * always sends the same query string to both routes) and the recency
+ * window's anchor date (the mirror's true latest call date). render() reads
+ * both: to name the values that excluded everything when a filter
+ * combination lists nothing, and to state the window's length and anchor on
+ * every list, not only the empty case. */
+const FILTERS = doorPayload.filters || {};
 
 /* Task 5.2: the type switcher. /api/types is fetched above alongside the
  * type-scoped data (not gated behind it) so a slow /api/types never delays
@@ -622,9 +695,21 @@ const ROWS = DATA.rows, BLOCKS = DATA.blocks;
       nextDue ? `Next update expected ${nextDue}.` : "Next update time not yet known.",
     ];
     const warning = f.stale_call_warning;
-    if (warning && warning.stale){
+    /* Task 7.2: a lag reads as one system's limit, not a vague "something is
+     * behind" -- `behind_source` (this sync has not pulled data HRM already
+     * published) is this system's own problem, checked first because it is
+     * the one that needs attention; a stale newest-call with no behind-source
+     * verdict is HRM's own publishing schedule going quiet, not a defect
+     * here, so it is worded as a limit, not a fault. */
+    if (f.behind_source){
+      parts.push("This mirror has fallen behind HRM: the source has published "
+        + "data this sync has not yet pulled -- the delay belongs to this "
+        + "system, not to HRM's publishing schedule.");
+      if (header) header.classList.add("behind");
+    } else if (warning && warning.stale){
       parts.push(`The most recent call in the data is ${Math.round(warning.days_old)} `
-        + "days old -- HRM may not have published recently.");
+        + "days old, but this sync is caught up with HRM -- the gap is a limit "
+        + "of HRM's own publishing schedule, not a problem with this mirror.");
       if (header) header.classList.add("stale");
     }
     if (header){ header.textContent = parts.join(" "); header.hidden = false; }
@@ -640,16 +725,30 @@ const ROWS = DATA.rows, BLOCKS = DATA.blocks;
   }
 })();
 
-/* Task 5.8: the tow-comparison sentence ("A tow does not lower the chance a
- * doorway calls again: X per cent against Y per cent") reads SLUG's own
- * stored figures from /api/types/<slug>/figures (mirror.type_figures,
- * computed once per mirror reload -- task 5.7 -- and never recomputed here),
- * replacing 5.2's stopgap that blanked the sentence for every non-default
- * type rather than have it silently show Driveway's frozen number under
- * another type's view. Independent of the map/doorway/block fetches above,
- * for the same reason the freshness and type-switcher fetches are: a slow or
- * failed figures request must not block the list a viewer actually asked
- * for -- it only ever affects this one sentence. `available: false` (no row
+/* Tasks 5.8/7.5: the tow-comparison sentence reads SLUG's own stored figures
+ * from /api/types/<slug>/figures (mirror.type_figures, computed once per
+ * mirror reload -- task 5.7 -- and never recomputed here), replacing 5.2's
+ * stopgap that blanked the sentence for every non-default type rather than
+ * have it silently show Driveway's frozen number under another type's view.
+ *
+ * 5.8 left this rendering a fixed template ("A tow does not lower the chance
+ * a doorway calls again: X per cent against Y per cent") with only the two
+ * numbers substituted per type -- its own task note flagged that
+ * `mirror.per_type` stores a `tow.conclusion_key` (tow_lower / tow_higher /
+ * no_difference / sample_too_small) that does not always match that framing:
+ * a type whose bootstrap actually finds towed doorways calling back *more*
+ * would have been described as "does not lower the chance" regardless. Task
+ * 7.5 closes that: the sentence's leading clause is now `tow.conclusion`
+ * itself (mirror.per_type's own type-phrased fragment, already correct for
+ * whichever of the four keys applies), not a template this file re-derives.
+ * The two recurrence percentages are appended for concreteness, and
+ * `tow.caveat` (the observational-comparison note, task 4.12) always follows
+ * -- both omitted only for `sample_too_small`, matching
+ * `per_type._type_conclusion`'s own choice not to caveat a comparison that
+ * was never made. Independent of the map/doorway/block fetches above, for
+ * the same reason the freshness and type-switcher fetches are: a slow or
+ * failed figures request must not block the list a viewer actually asked for
+ * -- it only ever affects this one sentence. `available: false` (no row
  * stored yet for the mirror's current version) is reported as "not yet
  * available" with the server's own stated reason, never computed here as a
  * fallback. */
@@ -659,6 +758,7 @@ const ROWS = DATA.rows, BLOCKS = DATA.blocks;
   const notYetAvailable = reason =>
     "Tow-effect comparison for this type is not yet available"
     + (reason ? ` (${reason}).` : ".");
+  const cap = s => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
   try{
     const resp = await fetch(`/api/types/${SLUG}/figures`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -668,12 +768,18 @@ const ROWS = DATA.rows, BLOCKS = DATA.blocks;
       return;
     }
     const tow = (payload.figures || {}).tow || {};
+    if (!tow.conclusion){
+      towThesis.textContent = notYetAvailable("no stored conclusion for the tow comparison");
+      return;
+    }
+    const sampleTooSmall = tow.conclusion_key === "sample_too_small";
     const towedPct = tow.towed ? tow.towed.recurrence_pct : null;
     const notTowedPct = tow.not_towed ? tow.not_towed.recurrence_pct : null;
-    towThesis.textContent = (towedPct == null || notTowedPct == null)
-      ? notYetAvailable("no recurrence rate stored for one or both tow groups")
-      : `A tow does not lower the chance a doorway calls again: `
-        + `${towedPct.toFixed(1)} per cent against ${notTowedPct.toFixed(1)} per cent.`;
+    const pctClause = (!sampleTooSmall && towedPct != null && notTowedPct != null)
+      ? ` (${towedPct.toFixed(1)} per cent against ${notTowedPct.toFixed(1)} per cent)`
+      : "";
+    const caveatClause = (!sampleTooSmall && tow.caveat) ? ` ${cap(tow.caveat)}.` : "";
+    towThesis.textContent = `${cap(tow.conclusion)}${pctClause}.${caveatClause}`;
   }catch(e){
     console.error("could not load type figures", e);
     towThesis.textContent = notYetAvailable(null);
@@ -1078,12 +1184,48 @@ function heads(){
   s.value = f.sort;
 }
 
+/* Task 5.5e: named, not silent. A filter combination (district, min. recent
+ * calls, min. calling doorways/block, recency window, recurrence window --
+ * the five controls FILTERS echoes back from the server that actually
+ * computed this list) can legitimately list nothing, and an empty page on
+ * its own reads exactly like a network failure or a bug -- boot()'s
+ * try/catch above already owns the wording for those two genuine failure
+ * cases ("Could not reach the server...", "The server could not produce
+ * this list just now..."). This is the third, distinct case: the server
+ * answered, correctly, with zero rows for the values currently in effect.
+ * Naming them is what makes "empty because of what I asked for" different
+ * from "empty because something broke". */
+function filterSummary(){
+  const bits = [];
+  if (FILTERS.district) bits.push(`district ${FILTERS.district}`);
+  bits.push(`min. recent calls ≥ ${FILTERS.min_calls}`);
+  bits.push(`min. calling doorways/block ≥ ${FILTERS.min_doorways}`);
+  bits.push(`recency window ≤ ${FILTERS.recency_days} days`);
+  bits.push(`recurrence window ≤ ${FILTERS.recur_days} days`);
+  return bits.join(", ");
+}
+
 function render(){
   el("clear-filters").hidden = !(f.district || f.status !== "all" || f.q);
   const v = items(), V = VOCAB();
-  el("showing").textContent = mode === "block"
-    ? `${v.length} of ${BLOCKS.length} blocks`
-    : `${v.length} of ${ROWS.length} doorways`;
+  const total = mode === "block" ? BLOCKS.length : ROWS.length;
+  const noun = mode === "block" ? "blocks" : "doorways";
+  el("showing").textContent = total === 0
+    ? `No ${noun} match ${filterSummary()}.`
+    : `${v.length} of ${total} ${noun}`;
+  // Task 7.4: the recency window's length and anchor date, on every
+  // filtered list -- the default (365 days) is itself a window (design.md
+  // M11), so this is not conditioned on a viewer having touched the
+  // toolbar. `doorPayload.latest` is the mirror's true latest call date
+  // (mirror.derive_recency's own docstring on why that is not the same
+  // value `hotspots.build()` is fed internally); the window runs back from
+  // it, not from "now".
+  const recencyNote = el("recency-note");
+  if (recencyNote){
+    recencyNote.textContent = doorPayload.latest
+      ? `Showing calls from the last ${FILTERS.recency_days} days, since ${doorPayload.latest}.`
+      : "";
+  }
   el("maptitle").textContent = mode === "block"
     ? "Halifax street network \u00b7 census blocks" : "Halifax street network \u00b7 doorways";
   const list = el("list"); list.textContent = "";
@@ -1126,7 +1268,14 @@ function render(){
   if (!v.length){
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = "No matches. Try another street, district or status.";
+    // Task 5.5e: `total === 0` means the server itself listed nothing for
+    // the derivation filters in effect (named by filterSummary()) -- a
+    // different situation from a non-empty list narrowed to nothing by the
+    // client-side search box, status tabs or district select, which keeps
+    // its own, separate wording below.
+    empty.textContent = total === 0
+      ? `No ${noun} match ${filterSummary()}. Widen a filter above and Apply filters again.`
+      : "No matches. Try another street, district or status.";
     list.appendChild(empty);
   }
   draw(); chips();
