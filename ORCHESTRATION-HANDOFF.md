@@ -18,10 +18,9 @@ the orchestrator re-ran the scratch-revert proofs for E and D itself (both fail 
   confirmed and fixed in `per_type.py`), but `/figures` serves a stored `type_figures` row (Driveway, computed
   2026-09-16) that still says "96%" until the row is recomputed or the mirror version changes. Recomputing
   writes to the real mirror, so it awaits the user; then tick 9.4. See the 9.4 line in `tasks.md`.
-- **For the user, not decided:** the four documents that print "96 per cent unique" (`README.md:94`,
-  `docs/parking-hotspots/product.md:36`, `docs/parking-hotspots/decisions.md:28`,
-  `docs/problem-selection/five-problems-research.md:172`); the browser check (concern 1); the spec questions
-  (concerns 16, 17, 20, 21).
+- **Docs (decided by the user):** `README.md:94` and `product.md:36` now say 95 per cent; `decisions.md:28`
+  (historical) and `five-problems-research.md:172` (dated, different data, its 96 is correct) left alone.
+- **For the user, not decided:** the browser check (concern 1); the spec questions (concerns 16, 17, 20, 21).
 - After the 9.4 decision the change is ready for the user to archive. Delete this file, `dispatch-plan.md` and
   `orchestration-progress/` (its `worker-J-artifacts/served-vs-live-report.txt` is the evidence for 9.4) then.
 

@@ -91,7 +91,7 @@ no dedicated CLI flag.*
 
 **A tow does not change anything.** Towed calls recur at 44.7 per cent. Not-towed calls recur at 44.7 per cent too — on current data the two round to the same number. A cluster bootstrap resampled by doorway (95 per cent interval) rules out a reduction larger than about 5.1 points. The comparison is observational: tows may cluster at the addresses already calling the most, which could mask a real effect in either direction.
 
-**It is a different car every time.** Across the 351 doorways, 2,413 distinct vehicles produced 2,528 calls. That is 96 per cent unique. 28 Queen St has 58 calls and 58 different vehicles, with no vehicle appearing twice.
+**It is a different car every time.** Across the 351 doorways, 2,413 distinct vehicles produced 2,528 calls. That is 95 per cent unique. 28 Queen St has 58 calls and 58 different vehicles, with no vehicle appearing twice.
 
 There is no repeat offender to deter. The street produces the violation, not the driver.
 

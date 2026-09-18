@@ -33,7 +33,7 @@ the most, which could mask a real effect in either direction.
 **It is a different car every time.**
 
 Across the 351 doorways still calling, 2,413 distinct vehicles produced 2,528 calls.
-That is 96 per cent unique.
+That is 95 per cent unique.
 28 Queen St has 58 calls and 58 different vehicles, with no vehicle appearing twice.
 
 There is no repeat offender to deter.
