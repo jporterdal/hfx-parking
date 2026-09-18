@@ -686,7 +686,7 @@ const FILTERS = doorPayload.filters || {};
   });
 })();
 
-/* Tasks 7.1/7.3/7.4a/7.2a: freshness is served, not asserted (design.md M4).
+/* Tasks 7.1/7.3/7.4a/7.2a/7.2b: freshness is served, not asserted (design.md M4).
  * Independent of the map/doorway/block fetches above for the same reason the
  * type-switcher fetch is -- a slow or failed /api/freshness must not block
  * the list a viewer actually asked for. Fills the header banner (#freshness,
@@ -739,6 +739,27 @@ const FILTERS = doorPayload.filters || {};
         + "of HRM's own publishing schedule, not a problem with this mirror.");
       if (header) header.classList.add("stale");
     }
+    /* Task 7.2b: a fourth, distinct freshness state -- when HRM *itself* is
+     * next likely to publish, as opposed to `nextUpdate` above (this sync's
+     * own next poll). `f.next_source_estimate` (src/app/server.py's
+     * `_next_source_estimate`) already decided whether there is enough
+     * observed history to say anything at all; this only branches on
+     * `.known`, the same convention as `nextUpdate.overdue` above, rather
+     * than re-deriving the two-interval threshold or the median here.
+     * Worded as an estimate ("estimated", "typically") throughout, never
+     * "due" or "expected", so it cannot be mistaken for the sync's own
+     * schedule above it -- and the not-yet-known branch says plainly that
+     * too little of HRM's publishing history has been observed, so a viewer
+     * does not read a blank or missing line as a broken feature. */
+    const sourceEstimate = f.next_source_estimate || {};
+    parts.push(
+      sourceEstimate.known
+        ? `HRM itself is estimated to next publish around ${fmt(sourceEstimate.estimated_next)} `
+          + `-- an estimate, not a promise, from the typical gap across `
+          + `${sourceEstimate.observed_intervals} observed intervals between its past publishes.`
+        : "It is not yet known when HRM itself is likely to publish next -- too few "
+          + "of its past publishes have been observed to estimate a cadence."
+    );
     if (header){ header.textContent = parts.join(" "); header.hidden = false; }
     if (footerLine){
       footerLine.textContent = lastSync

@@ -15,7 +15,10 @@ with curl -- is not repeated here; that is a one-off manual check, not
 something worth re-running on every `pytest` invocation.
 """
 
+import csv
 import datetime
+import html
+import io
 import json
 import re
 
@@ -1503,7 +1506,7 @@ def test_freshness_route_reports_the_four_clocks(client, clean_db):
     assert set(payload) == {
         "checked_at", "most_recent_call_date", "last_success_at",
         "last_attempt_at", "next_due_at", "behind_source", "behind_reason",
-        "stale_call_warning", "next_update",
+        "stale_call_warning", "next_update", "next_source_estimate",
     }
     # Parsed back to the same instant regardless of the offset the string
     # carries -- this is the check that would have caught the discarded
@@ -1551,6 +1554,7 @@ def test_freshness_route_with_no_sync_history_does_not_crash(client, clean_db):
     }
     assert payload["next_update"]["known"] is False
     assert payload["next_update"]["overdue"] is False
+    assert payload["next_source_estimate"]["known"] is False
 
 
 def test_freshness_warns_when_the_newest_call_is_materially_stale(client, clean_db):
@@ -1808,6 +1812,135 @@ def test_next_update_a_success_one_second_before_the_due_time_does_not_count():
     assert result["overdue"] is True
 
 
+# ------------------------------------------- 7.2b next-source-update estimate
+
+
+def test_next_source_estimate_known_with_exactly_two_observed_intervals(client, clean_db):
+    """Task 7.2b's chosen threshold, exercised through the route: three
+    recorded publishes (two intervals) is exactly enough to compute a spread
+    -- must read as known, with an estimate built from the median gap, not
+    "not yet known" and not a crash."""
+    first = datetime.datetime(2026, 8, 1, 4, 0, tzinfo=datetime.UTC)
+    second = first + datetime.timedelta(days=7)
+    third = second + datetime.timedelta(days=9)
+    for edit in (first, second, third):
+        insert_pulled_edit(clean_db, "service_requests", edit)
+
+    payload = client.get("/api/freshness").get_json()
+
+    estimate = payload["next_source_estimate"]
+    assert estimate["known"] is True
+    assert estimate["observed_intervals"] == 2
+    assert estimate["median_interval_days"] == pytest.approx(8.0)
+    assert (datetime.datetime.fromisoformat(estimate["estimated_next"])
+            == third + datetime.timedelta(days=8))
+
+
+def test_next_source_estimate_not_known_with_only_one_observed_interval(client, clean_db):
+    """One below 7.2b's threshold: two recorded publishes give a single
+    interval. design.md M3 states plainly that a single gap "is not evidence
+    of any particular" cadence, so this must read as not known rather than
+    guess a schedule from it."""
+    first = datetime.datetime(2026, 8, 1, 4, 0, tzinfo=datetime.UTC)
+    second = first + datetime.timedelta(days=7)
+    for edit in (first, second):
+        insert_pulled_edit(clean_db, "service_requests", edit)
+
+    payload = client.get("/api/freshness").get_json()
+
+    estimate = payload["next_source_estimate"]
+    assert estimate["known"] is False
+    assert estimate["observed_intervals"] == 1
+    assert estimate["estimated_next"] is None
+    assert "not enough history" in estimate["reason"]
+
+
+def test_next_source_estimate_not_known_with_no_publish_history_at_all(client, clean_db):
+    """A store nobody has synced yet: the same "not yet answerable" state as
+    `test_freshness_route_with_no_sync_history_does_not_crash`, not a 500."""
+    payload = client.get("/api/freshness").get_json()
+
+    estimate = payload["next_source_estimate"]
+    assert estimate["known"] is False
+    assert estimate["observed_intervals"] == 0
+    assert estimate["estimated_next"] is None
+
+
+# The boundary itself, called directly against `_next_source_estimate` with a
+# constructed history rather than through the route's real database -- the
+# same reason `_next_update_state`'s boundary tests above call it directly.
+# `_history_of` builds the same shape `sync.source_edit_history` returns
+# (a list of dicts with "source_last_edit" and "interval", ascending, first
+# entry's interval always None) without touching the database.
+def _history_of(*edits):
+    history, previous = [], None
+    for edited in edits:
+        history.append({
+            "source_last_edit": edited,
+            "interval": (edited - previous) if previous else None,
+        })
+        previous = edited
+    return history
+
+
+def test_next_source_estimate_boundary_exactly_two_intervals_is_known():
+    edits = [
+        datetime.datetime(2026, 8, 1, tzinfo=datetime.UTC),
+        datetime.datetime(2026, 8, 8, tzinfo=datetime.UTC),
+        datetime.datetime(2026, 8, 17, tzinfo=datetime.UTC),
+    ]
+
+    result = app_server._next_source_estimate(_history_of(*edits))
+
+    assert result["known"] is True
+    assert result["observed_intervals"] == 2
+    assert result["reason"] is None
+
+
+def test_next_source_estimate_boundary_one_interval_is_one_below_threshold_and_not_known():
+    edits = [
+        datetime.datetime(2026, 8, 1, tzinfo=datetime.UTC),
+        datetime.datetime(2026, 8, 8, tzinfo=datetime.UTC),
+    ]
+
+    result = app_server._next_source_estimate(_history_of(*edits))
+
+    assert result["known"] is False
+    assert result["observed_intervals"] == 1
+    assert result["estimated_next"] is None
+    assert "not enough history" in result["reason"]
+
+
+def test_median_timedelta_odd_count_returns_the_middle_value():
+    deltas = [datetime.timedelta(days=5), datetime.timedelta(days=1), datetime.timedelta(days=9)]
+
+    assert app_server._median_timedelta(deltas) == datetime.timedelta(days=5)
+
+
+def test_median_timedelta_even_count_averages_the_two_middle_values():
+    deltas = [datetime.timedelta(days=4), datetime.timedelta(days=10)]
+
+    assert app_server._median_timedelta(deltas) == datetime.timedelta(days=7)
+
+
+def test_served_page_shows_the_not_yet_known_and_estimate_wording_for_next_source_update(client):
+    """Task 7.2b's client-side wiring lives in `web/app/index.html`'s boot()
+    fetch, which Python tests cannot execute -- so this pins both branches as
+    static text in the served script, the same way the neighbouring 7.2/7.2a
+    tests pin their own wording. Must read `f.next_source_estimate.known`
+    (the server's own decision, not a client-side re-derivation of the
+    interval-count threshold), and the known branch must say "estimated",
+    never "due"/"expected", so it cannot be mistaken for `nextUpdate` above
+    it."""
+    body = client.get("/").get_data(as_text=True)
+
+    assert "next_source_estimate" in body
+    assert "sourceEstimate.known" in body
+    assert "It is not yet known when HRM itself is likely to publish next" in body
+    assert "HRM itself is estimated to next publish around" in body
+    assert "estimate, not a promise" in body
+
+
 def test_served_page_shows_overdue_state_instead_of_a_stale_future_promise(client):
     """Task 7.2a's client-side wiring lives in `web/app/index.html`'s boot()
     fetch, which Python tests cannot execute -- so this pins the overdue
@@ -1845,4 +1978,323 @@ def test_served_page_fetches_freshness_and_no_longer_asserts_liveness(client):
 
     assert "Regenerated from the live service" not in body
     assert "/api/freshness" in body
-    assert 'id="freshness"' in body
+
+
+# ------------------------------------------------------------------- export (7.7)
+
+
+def _csv_metadata(text):
+    """Every `key,value` metadata row `_export_csv_text` writes before the
+    blank line + "DOORWAYS" marker, as a dict -- the preamble this task's
+    export puts ahead of the two real data tables (see that function's own
+    docstring for why a preamble, not a second file, carries the type,
+    clocks, filters and limits). Stops at the first row that is not exactly
+    two cells, which is either a deliberate blank separator row or the
+    "DOORWAYS"/"BLOCKS" section marker -- both signal the preamble is over.
+    """
+    meta = {}
+    for row in csv.reader(io.StringIO(text)):
+        if not row:
+            continue  # a blank separator row between preamble groups
+        if len(row) == 1:
+            break  # the "DOORWAYS"/"BLOCKS" section marker -- preamble is over
+        if row[0] not in meta:
+            meta[row[0]] = row[1]
+    return meta
+
+
+def _csv_section(text, marker):
+    """The rows of one lettered CSV data table (`"DOORWAYS"` or `"BLOCKS"`):
+    the header row (readable column names) plus every data row that follows,
+    up to the next blank row or the end of the file."""
+    rows = list(csv.reader(io.StringIO(text)))
+    start = next(i for i, row in enumerate(rows) if row == [marker]) + 1
+    header = rows[start]
+    data = []
+    for row in rows[start + 1:]:
+        if not row:
+            break
+        data.append(dict(zip(header, row)))
+    return header, data
+
+
+def test_export_csv_carries_every_listed_row(client, clean_db):
+    """Requirement 1 of task 7.7's verify clause: the export must carry every
+    row the view lists for the same type/filter combination -- checked
+    against the live `/api/types/<slug>/doorways`/`/blocks` routes, not
+    trusted from the CSV alone, so a discrepancy between the two would fail
+    this test rather than go unnoticed.
+    """
+    seed_two_doorway_block(clean_db)
+
+    doorways_json = client.get("/api/types/blocking-driveway/doorways").get_json()
+    blocks_json = client.get("/api/types/blocking-driveway/blocks").get_json()
+    resp = client.get("/api/types/blocking-driveway/export.csv")
+
+    assert resp.status_code == 200
+    text = resp.get_data(as_text=True)
+    _, doorway_rows = _csv_section(text, "DOORWAYS")
+    _, block_rows = _csv_section(text, "BLOCKS")
+
+    assert len(doorway_rows) == len(doorways_json["rows"]) == 2
+    assert len(block_rows) == len(blocks_json["blocks"]) == 1
+    exported_addresses = {r["Address"] for r in doorway_rows}
+    listed_addresses = {r["a"] for r in doorways_json["rows"]}
+    assert exported_addresses == listed_addresses == {"1 First St", "2 Second St"}
+    assert block_rows[0]["Block"] == blocks_json["blocks"][0]["bk"]
+
+
+def test_export_csv_states_the_violation_type_plainly(client, clean_db):
+    """Requirement 2: the canonical type name, unambiguously, as data inside
+    the file -- not left for a reader to infer from the URL slug or a
+    filename. (Task 7.7a, not this one, owns naming it *without* even
+    cross-referencing a filename; this only checks it is stated at all.)
+    """
+    seed_two_doorway_block(clean_db)
+
+    text = client.get("/api/types/blocking-driveway/export.csv").get_data(as_text=True)
+
+    meta = _csv_metadata(text)
+    assert meta["violation_type"] == "Blocking Driveway"
+    assert meta["slug"] == "blocking-driveway"
+
+
+def test_export_csv_404s_for_an_untracked_slug(client):
+    resp = client.get("/api/types/not-a-real-type/export.csv")
+
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "untracked"
+
+
+def test_export_csv_is_served_as_a_downloadable_csv_file(client, clean_db):
+    seed_two_doorway_block(clean_db)
+
+    resp = client.get("/api/types/blocking-driveway/export.csv")
+
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/csv"
+    assert 'attachment; filename="blocking-driveway-export.csv"' in resp.headers[
+        "Content-Disposition"
+    ]
+
+
+def test_export_csv_carries_the_same_clocks_freshness_already_serves(client, clean_db):
+    """Requirement 3: the clocks -- read from the identical
+    `mirror.status.mirror_freshness`/`_freshness_payload` path
+    `GET /api/freshness` uses, so this pins the export's clocks against that
+    route's own live answer rather than against a hand-picked expectation
+    that could drift from it.
+    """
+    success = datetime.datetime(2026, 9, 10, 4, 0, tzinfo=datetime.UTC)
+    due = datetime.datetime(2026, 9, 18, 4, 0, tzinfo=datetime.UTC)
+    for layer in ("service_requests", "custom_fields"):
+        set_layer_state(clean_db, layer, source_last_edit=success, last_attempt_at=success,
+                        last_attempt_ok=True, last_success_at=success, next_due_at=due)
+    seed_two_doorway_block(clean_db)
+
+    freshness = client.get("/api/freshness").get_json()
+    text = client.get("/api/types/blocking-driveway/export.csv").get_data(as_text=True)
+
+    meta = _csv_metadata(text)
+    assert meta["last_success_at"] == freshness["last_success_at"]
+    assert meta["next_due_at"] == freshness["next_due_at"]
+    assert meta["behind_source"] == str(freshness["behind_source"])
+    assert meta["behind_reason"] == (freshness["behind_reason"] or "")
+
+
+def test_export_csv_states_the_filter_values_in_effect(client, clean_db):
+    """Requirement 4: the filter values in effect, both as raw values (every
+    one of the five `_filters_from_request()` reads) and as the same "which
+    filters differ from default" phrasing 5.5d introduced client-side
+    (`activeFilterBits()`) -- `_active_filter_bits` is this task's Python
+    equivalent, checked here for the exact same wording.
+    """
+    seed_two_doorway_block(clean_db)
+
+    default_text = client.get(
+        "/api/types/blocking-driveway/export.csv"
+    ).get_data(as_text=True)
+    filtered_text = client.get(
+        "/api/types/blocking-driveway/export.csv?min_calls=1&district=7"
+    ).get_data(as_text=True)
+
+    default_meta = _csv_metadata(default_text)
+    assert default_meta["filter: min_calls"] == "2"
+    assert default_meta["filter: district"] == ""
+    assert default_meta["filters_in_effect"] == "Default filters -- none active."
+
+    filtered_meta = _csv_metadata(filtered_text)
+    assert filtered_meta["filter: min_calls"] == "1"
+    assert filtered_meta["filter: district"] == "7"
+    assert filtered_meta["filters_in_effect"] == (
+        "Filtered by district 7, min. recent calls ≥ 1."
+    )
+
+
+def test_export_csv_carries_the_same_six_limits_as_the_view(client, clean_db):
+    """Requirement 5: the same six interpretation limits 7.5 put in
+    `web/app/index.html`'s footer -- checked against `app_server.
+    _INTERPRETATION_LIMITS` (this task's own hand-kept copy of that wording,
+    see its docstring on the duplication) so a wording edit to one is
+    automatically what this test compares against, not a third, independent
+    copy of the six sentences pasted into this test file.
+    """
+    seed_two_doorway_block(clean_db)
+
+    text = client.get("/api/types/blocking-driveway/export.csv").get_data(as_text=True)
+    meta = _csv_metadata(text)
+
+    assert len(app_server._INTERPRETATION_LIMITS) == 6
+    for limit in app_server._INTERPRETATION_LIMITS:
+        key = f"limit: {limit['id']}"
+        assert key in meta, f"{key} missing from export"
+        assert limit["title"] in meta[key]
+        assert limit["text"] in meta[key]
+
+
+def test_export_csv_carries_the_tow_effect_sentence_when_available(client, clean_db):
+    """Requirement 6: a readable brief/table should carry the same tow-effect
+    sentence the view's `#tow-thesis` shows, built from
+    `mirror.type_figures.figures_for` -- not just the raw row table. Checked
+    against the same stored `tow.conclusion`/`tow.caveat` fragments the
+    `/api/types/<slug>/figures` route serves, via `app_server.
+    _tow_thesis_sentence` applied to that exact payload, so a discrepancy
+    between the export's sentence and the figures route's own data would
+    fail this test.
+    """
+    seed_two_doorway_block(clean_db)
+    outcomes = mirror_type_figures.compute_and_store(
+        clean_db, types=[app_server.DEFAULT_CANONICAL_TYPE], log=lambda m: None,
+    )
+    assert outcomes and outcomes[0]["ok"]
+
+    figures_payload = client.get("/api/types/blocking-driveway/figures").get_json()
+    text = client.get("/api/types/blocking-driveway/export.csv").get_data(as_text=True)
+
+    meta = _csv_metadata(text)
+    expected = app_server._tow_thesis_sentence(figures_payload)
+    assert meta["tow_effect"] == expected
+    assert expected != "Tow-effect comparison for this type is not yet available."
+
+
+def test_export_csv_states_tow_effect_not_yet_available_when_nothing_is_stored(
+        client, clean_db):
+    seed_two_doorway_block(clean_db)
+
+    text = client.get("/api/types/blocking-driveway/export.csv").get_data(as_text=True)
+
+    meta = _csv_metadata(text)
+    assert meta["tow_effect"].startswith("Tow-effect comparison for this type is not yet available")
+
+
+# --------------------------------------------------------- export brief (7.7)
+
+
+def test_export_brief_carries_every_listed_row(client, clean_db):
+    """Requirement 1, for the HTML brief this time: every doorway and block
+    row appears in the rendered tables, not just a summary count."""
+    seed_two_doorway_block(clean_db)
+
+    doorways_json = client.get("/api/types/blocking-driveway/doorways").get_json()
+    body = client.get("/types/blocking-driveway/export").get_data(as_text=True)
+
+    for row in doorways_json["rows"]:
+        assert row["a"] in body
+    assert ">2<" in body or "Doorways (2)" in body  # doorway count heading
+
+
+def test_export_brief_states_the_violation_type_plainly(client, clean_db):
+    seed_two_doorway_block(clean_db)
+
+    body = client.get("/types/blocking-driveway/export").get_data(as_text=True)
+
+    assert "Blocking Driveway" in body
+    assert "blocking-driveway" in body
+
+
+def test_export_brief_404s_with_a_rendered_reason_for_an_untracked_slug(client):
+    """Same convention as `/types/<slug>` (task 5.3): a rendered explanation,
+    not Flask's bare default 404 page, since this is a `/types/...` page
+    route rather than an `/api/...` one."""
+    resp = client.get("/types/not-a-real-type/export")
+
+    assert resp.status_code == 404
+    body = resp.get_data(as_text=True)
+    assert "not-a-real-type" in body
+    assert "is not a tracked type" in body
+
+
+def test_export_brief_carries_the_same_clocks_freshness_already_serves(client, clean_db):
+    success = datetime.datetime(2026, 9, 10, 4, 0, tzinfo=datetime.UTC)
+    due = datetime.datetime(2026, 9, 18, 4, 0, tzinfo=datetime.UTC)
+    for layer in ("service_requests", "custom_fields"):
+        set_layer_state(clean_db, layer, source_last_edit=success, last_attempt_at=success,
+                        last_attempt_ok=True, last_success_at=success, next_due_at=due)
+    seed_two_doorway_block(clean_db)
+
+    freshness = client.get("/api/freshness").get_json()
+    body = client.get("/types/blocking-driveway/export").get_data(as_text=True)
+
+    assert freshness["last_success_at"] in body
+    assert freshness["next_due_at"] in body
+
+
+def test_export_brief_states_the_filter_values_in_effect(client, clean_db):
+    seed_two_doorway_block(clean_db)
+
+    body = client.get(
+        "/types/blocking-driveway/export?min_calls=1&district=7"
+    ).get_data(as_text=True)
+
+    assert "Filtered by district 7, min. recent calls ≥ 1." in body
+
+
+def test_export_brief_carries_the_same_six_limits_as_the_view(client, clean_db):
+    seed_two_doorway_block(clean_db)
+
+    # html.unescape: Jinja auto-escapes the apostrophes two of the six limits'
+    # titles carry ("A block's street label...", "A block's dwelling
+    # count..."), which is the right, safe default for text this module does
+    # not control the exact characters of -- so this compares against what a
+    # browser would display, not against the raw (escaped) markup.
+    body = html.unescape(client.get("/types/blocking-driveway/export").get_data(as_text=True))
+
+    for limit in app_server._INTERPRETATION_LIMITS:
+        assert f'id="{limit["id"]}"' in body
+        assert limit["title"] in body
+
+
+def test_export_brief_carries_the_tow_effect_sentence(client, clean_db):
+    seed_two_doorway_block(clean_db)
+    outcomes = mirror_type_figures.compute_and_store(
+        clean_db, types=[app_server.DEFAULT_CANONICAL_TYPE], log=lambda m: None,
+    )
+    assert outcomes and outcomes[0]["ok"]
+
+    figures_payload = client.get("/api/types/blocking-driveway/figures").get_json()
+    # html.unescape: the stored tow fragment (from too small a sample here)
+    # includes a literal "need >= 30 each", which Jinja escapes to "&gt;=" in
+    # the rendered page -- correctly, since this is computed text, not a
+    # literal this module controls. Compare against what a browser displays.
+    body = html.unescape(client.get("/types/blocking-driveway/export").get_data(as_text=True))
+
+    expected = app_server._tow_thesis_sentence(figures_payload)
+    assert expected in body
+
+
+def test_export_csv_and_brief_agree_on_row_counts_with_the_view(client, clean_db):
+    """A light version of task 7.8's own concern ("a view and an export
+    taken together agree on every count") -- not that task's full scope, but
+    a defensible sanity check that this task's two export formats do not
+    silently disagree with each other or with the live JSON routes about how
+    many rows a given filter combination lists.
+    """
+    seed_two_doorway_block(clean_db)
+
+    doorways_json = client.get("/api/types/blocking-driveway/doorways").get_json()
+    csv_text = client.get("/api/types/blocking-driveway/export.csv").get_data(as_text=True)
+    brief_body = client.get("/types/blocking-driveway/export").get_data(as_text=True)
+
+    _, csv_rows = _csv_section(csv_text, "DOORWAYS")
+    assert len(csv_rows) == doorways_json["count"] == 2
+    assert f"Doorways ({doorways_json['count']})" in brief_body

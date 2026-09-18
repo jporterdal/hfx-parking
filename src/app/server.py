@@ -64,8 +64,21 @@ Route table:
                                          last_success_at, last_attempt_at,
                                          next_due_at, behind_source,
                                          behind_reason, stale_call_warning,
-                                         next_update}` -- tasks
-                                         7.1/7.2/7.2a/7.4a, see below
+                                         next_update, next_source_estimate}`
+                                         -- tasks 7.1/7.2/7.2a/7.2b/7.4a, see
+                                         below
+  GET  /api/types/<slug>/export.csv     a type's doorway and block lists as
+                                         one downloadable CSV, plus the type
+                                         it covers, the same clocks
+                                         `/api/freshness` serves, the filter
+                                         values in effect and the six
+                                         interpretation limits the served
+                                         page footnotes -- task 7.7, see below
+  GET  /types/<slug>/export             a readable brief covering the same
+                                         type/filter combination as the CSV
+                                         above -- the same rows, clocks,
+                                         filters and limits, rendered as a
+                                         page rather than a file -- task 7.7
 
 Every list is computed per request from the mirror via `mirror.derive.derive`
 (design.md M11) -- nothing here materializes a doorway or block list ahead of a
@@ -159,6 +172,18 @@ more than a grace period, with nothing successful since -- turning
 `next_due_at` from a rendered date that would keep looking healthy forever
 into an explicit `overdue` state (design.md M4).
 
+**Task 7.2b: a fourth, distinct clock -- when HRM itself is next likely to
+publish**, not when this sync is next due to poll. `next_due_at`/`next_update`
+above are this sync's *own* schedule (`now + sync.POLL_INTERVAL`), well-defined
+the moment any sync has ever run. `next_source_estimate` is a different thing:
+an estimate of *HRM's* cadence, built from `sync.source_edit_history`'s
+observed gaps between the source's own past publishes (design.md M2.6b/M3).
+`_next_source_estimate` refuses to guess from fewer than two observed
+intervals (three recorded publishes) -- design.md M3 is explicit that a single
+gap "is not evidence of any particular" cadence -- and states plainly that the
+next source update is not yet known rather than fabricate a schedule from one
+data point or render nothing.
+
 `web/app/index.html`'s header banner (`#freshness`) and footer
 (`#footer-sync-date`) fetch this route and are what makes 7.1's "last
 successful update and expected next update" prominent on every view, and
@@ -189,9 +214,29 @@ selection throughout, because that is the axis `/api/types/<slug>/...` routes
 on and the one 5.2 extends; task 4.9's reconciliation is what keeps
 `hotspots.load("Driveway")` and `derive.derive(canonical_type="Blocking
 Driveway")` provably in step, not this module.
+
+**Task 7.7: a type's lists, exported.** Two new routes, both reusing exactly
+the same read paths the served page already does -- `derive_recency.
+derive_with_recency` for the rows (same filters as `doorways()`/`blocks()`),
+`_freshness_for_export`'s thin wrapper over `status.mirror_freshness`/
+`_freshness_payload` for the clocks (the identical picture `GET
+/api/freshness` serves, never recomputed), and `type_figures.figures_for` for
+the tow-effect sentence. `GET /api/types/<slug>/export.csv` is "a complete
+table": every doorway and block row for the type/filter combination in
+effect, with no truncation. `GET /types/<slug>/export` is "a readable brief":
+the same rows, plus the canonical type name stated plainly, the clocks, the
+filter values in effect and the six interpretation limits 7.5 put in the
+served page's footer, rendered as an HTML page via `render_template_string`
+(`_untracked_type_page`'s own pattern -- design.md M12 rules out a build
+step) rather than a downloadable file. `_INTERPRETATION_LIMITS` is a second,
+hand-kept copy of the six `<li id="lim-...">` entries in `web/app/
+index.html`'s footer (`:503`-`:528`) -- see that constant's own docstring for
+why a shared source was rejected and what keeping two copies in sync costs.
 """
 
+import csv
 import datetime
+import io
 import os
 import pathlib
 import re
@@ -208,7 +253,7 @@ if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
 from flask import (  # noqa: E402
-    Flask, jsonify, render_template_string, request, send_from_directory,
+    Flask, Response, jsonify, render_template_string, request, send_from_directory,
 )
 
 from mirror import (  # noqa: E402
@@ -583,11 +628,97 @@ def _next_update_state(freshness, now=None):
     }
 
 
-def _freshness_payload(freshness, now=None):
+# Task 7.2b: how many observed intervals between HRM's own past publishes
+# (`sync.source_edit_history`) are required before `_next_source_estimate`
+# will state an estimate at all, rather than "not yet known". Two, not one:
+# a single interval is a single number with no way to tell a typical gap from
+# a fluke -- design.md M3's own words for exactly this trap: "on 2026-09-15
+# the source had not been updated for two days, which is consistent with a
+# cadence slower than daily and is not evidence of any particular one." Two
+# intervals (three recorded publishes) is the smallest history from which a
+# second gap can be compared against the first at all -- still thin evidence,
+# and the served wording says "estimated", never "due" or "expected", to
+# carry that uncertainty into the banner rather than dressing a two-point
+# average up as a schedule. A higher bar (three or four intervals) was
+# considered and rejected: design.md M2a already sets four *publishes* as the
+# bar for a much higher-stakes decision (whether identifiers are stable
+# enough to justify an incremental sync); reusing that same number here for a
+# purely informational estimate, worded as an estimate throughout, would
+# withhold it longer than the actual risk of being wrong warrants.
+NEXT_SOURCE_ESTIMATE_MIN_INTERVALS = 2
+
+
+def _median_timedelta(deltas):
+    """The median of a non-empty list of `datetime.timedelta` values.
+    `statistics.median` is not used here because its even-length averaging
+    path is not documented against `timedelta` inputs; this is four lines and
+    is exercised directly by this module's tests instead of trusted from
+    algebra alone."""
+    ordered = sorted(deltas)
+    mid = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def _next_source_estimate(history, now=None):
+    """Task 7.2b: when HRM itself is likely to publish next -- distinct from
+    `_next_update_state`'s `next_due_at` (this *sync's* own polling schedule,
+    `now + sync.POLL_INTERVAL`, well-defined the instant any sync has run).
+    This is an estimate of the *source's* cadence, built only from what has
+    actually been observed (`sync.source_edit_history`'s gaps between HRM's
+    past publishes) -- there is no schedule to fall back on if HRM has not
+    shown one yet.
+
+    Refuses to estimate from fewer than `NEXT_SOURCE_ESTIMATE_MIN_INTERVALS`
+    observed intervals (see that constant's comment for why two, and why not
+    higher) -- with one interval or none, `known` is False and `reason`
+    explains why in terms a viewer can tell apart from a broken feature: not
+    enough of HRM's own publishing history has been observed yet, not "check
+    back later, something is wrong here."
+
+    With enough history, the estimate is the last observed publish plus the
+    *median* observed interval (not the mean, which one unusually long or
+    short gap could distort) -- kept deliberately simple, and labelled
+    `estimated_next` rather than anything implying a promise.
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    intervals = [entry["interval"] for entry in history if entry["interval"] is not None]
+    if len(intervals) < NEXT_SOURCE_ESTIMATE_MIN_INTERVALS:
+        return {
+            "known": False,
+            "estimated_next": None,
+            "median_interval_days": None,
+            "observed_intervals": len(intervals),
+            "reason": (
+                f"fewer than {NEXT_SOURCE_ESTIMATE_MIN_INTERVALS} observed intervals "
+                "between HRM's past publishes -- not enough history yet to estimate "
+                "when it will publish next"
+            ),
+        }
+    median = _median_timedelta(intervals)
+    last_publish = history[-1]["source_last_edit"]
+    return {
+        "known": True,
+        "estimated_next": _iso_utc(last_publish + median),
+        "median_interval_days": round(median.total_seconds() / 86400, 1),
+        "observed_intervals": len(intervals),
+        "reason": None,
+    }
+
+
+def _freshness_payload(freshness, now=None, history=None):
     """The `GET /api/freshness` JSON body: a thin reshaping of
     `mirror.status.mirror_freshness`'s dict (every field except
-    `stale_call_warning` and `behind_reason` is read off it, not recomputed),
-    with every timestamp normalized through `_iso_utc`.
+    `stale_call_warning`, `behind_reason` and `next_source_estimate` is read
+    off it, not recomputed), with every timestamp normalized through
+    `_iso_utc`.
+
+    `history` (task 7.2b) is `sync.source_edit_history`'s list for the data
+    layer -- a separate query the route below issues, since `mirror_freshness`
+    does not carry it. Defaults to `[]` (reads as "not yet known", the same
+    honest state as no sync history at all) so every existing caller of this
+    function keeps working unchanged.
     """
     now = now or datetime.datetime.now(datetime.timezone.utc)
     return {
@@ -600,7 +731,378 @@ def _freshness_payload(freshness, now=None):
         "behind_reason": _behind_reason(freshness),
         "stale_call_warning": _call_staleness(freshness["most_recent_call_date"], now=now),
         "next_update": _next_update_state(freshness, now=now),
+        "next_source_estimate": _next_source_estimate(history or [], now=now),
     }
+
+
+# ------------------------------------------------------------------- export (7.7)
+
+
+# Task 7.7's own copy of the six interpretation limits 7.5 added to
+# `web/app/index.html`'s footer ("Read these numbers carefully",
+# `web/app/index.html:503`-`:528`) -- intake clock, tow as the only recorded
+# outcome, vehicle identity as a floor, text-address reduction, derived block
+# labels and block-wide dwelling rate. There is no shared Python-side source
+# of truth for that wording today: `index.html` is a static file with no
+# templating step (design.md M12), so the six texts live only as hardcoded
+# HTML there, and adding a templating step to a page that deliberately has
+# none is a bigger lift than this task asks for. This constant is therefore a
+# second copy, not a shared import. **This creates two places to keep in
+# sync**: a wording change to any of the six `<li id="lim-...">` entries in
+# `index.html` must be mirrored here by hand, and nothing enforces that
+# automatically -- `tests/test_app.py` only pins that today's wording matches
+# on both sides, not that a future edit to one is caught on the other.
+_INTERPRETATION_LIMITS = [
+    {
+        "id": "lim-intake",
+        "title": "Dates are intake, not condition.",
+        "text": (
+            'Every "still calling" count and every recency or recurrence '
+            "window is measured from the date HRM logged the call, not from "
+            "when the underlying condition began or ended. A doorway can "
+            "read as active weeks after whatever was blocking it is gone, or "
+            "as quiet simply because nobody has called it in yet."
+        ),
+    },
+    {
+        "id": "lim-tow",
+        "title": "Tow is the only recorded outcome.",
+        "text": (
+            "HRM publishes no ticketing field. A call with no tow is a call "
+            "with no recorded outcome, not proof that nothing happened. The "
+            "tow comparison itself is observational, not a randomized trial: "
+            "tows may cluster at the addresses already calling the most, "
+            "which could mask a real effect in either direction."
+        ),
+    },
+    {
+        "id": "lim-vehicle",
+        "title": "Vehicle identity is a floor.",
+        "text": (
+            "A vehicle is recorded as make, model and colour, not a plate, "
+            "so two identical cars at the same address count as one. The "
+            "unique-vehicle share this page shows can only ever be an "
+            "undercount of the true number of distinct cars, never an "
+            "overcount."
+        ),
+    },
+    {
+        "id": "lim-address",
+        "title": "Addresses are matched as text, not geocoded.",
+        "text": (
+            "The same physical doorway logged two different ways by HRM "
+            "becomes two rows here; two different doorways logged "
+            "identically become one. Counts of doorways, and anything built "
+            "on top of them, inherit that split-or-merge risk."
+        ),
+    },
+    {
+        "id": "lim-block-label",
+        "title": "A block's street label is derived, not official.",
+        "text": (
+            "It names whichever street the calling doorways on this list "
+            "happen to share -- not a boundary HRM, the census or the city "
+            "assigns. Two blocks that look identically labelled are not "
+            "guaranteed to be the same official area, and the reverse."
+        ),
+    },
+    {
+        "id": "lim-dwelling",
+        "title": "The dwelling rate is block-wide.",
+        "text": (
+            "A block's dwelling count, and any per-1,000-dwellings rate "
+            "built from it, covers every dwelling in the whole census block "
+            "-- not just the street frontage the calls actually sit on. A "
+            "block that wraps two streets counts dwellings from both against "
+            "calls logged on only one."
+        ),
+    },
+]
+
+
+def _active_filter_bits(filters):
+    """Task 7.7's Python equivalent of `web/app/index.html`'s
+    `activeFilterBits()` (task 5.5d) -- which of the five filters
+    `_filters_from_request()` reads differ from `_FILTER_DEFAULTS`, phrased
+    identically to the client-side function (same wording, same unicode
+    `≥`/`≤`) so an export and the page it was exported from state a
+    filter departure in the same words. Not imported from the JS -- nothing
+    here executes JavaScript -- kept in step by `tests/test_app.py` pinning
+    the same literal phrases on both sides.
+    """
+    bits = []
+    if filters.get("district"):
+        bits.append(f"district {filters['district']}")
+    if filters["min_calls"] != _FILTER_DEFAULTS["min_calls"]:
+        bits.append(f"min. recent calls ≥ {filters['min_calls']}")
+    if filters["min_doorways"] != _FILTER_DEFAULTS["min_doorways"]:
+        bits.append(f"min. calling doorways/block ≥ {filters['min_doorways']}")
+    if filters["recency_days"] != _FILTER_DEFAULTS["recency_days"]:
+        bits.append(f"recency window ≤ {filters['recency_days']} days")
+    if filters["recur_days"] != _FILTER_DEFAULTS["recur_days"]:
+        bits.append(f"recurrence window ≤ {filters['recur_days']} days")
+    return bits
+
+
+def _active_filter_summary(filters):
+    """`", ".join(_active_filter_bits(filters))` -- `""` when every filter is
+    at its default, the same "nothing to say" convention
+    `activeFilterSummary()` uses client-side (5.5d)."""
+    return ", ".join(_active_filter_bits(filters))
+
+
+def _recency_note(filters, latest):
+    """The same recency-window sentence task 7.4 states on every filtered
+    list (`web/app/index.html`'s `#recency-note`, filled by `render()`): the
+    window's length and the true anchor date it runs back from. `""` when
+    `latest` (already formatted `%Y-%m-%d`, or `None`) is unknown -- no calls
+    at all for this type -- matching the page's own guard.
+    """
+    if not latest:
+        return ""
+    return f"Showing calls from the last {filters['recency_days']} days, since {latest}."
+
+
+def _tow_thesis_sentence(figures_result):
+    """The same sentence `web/app/index.html`'s `#tow-thesis` IIFE renders
+    (tasks 5.8/7.5), reproduced here so a brief or table export states the
+    identical tow-effect claim a viewer of the served page would read --
+    built from `mirror.type_figures.figures_for`'s stored
+    `tow.conclusion`/`tow.caveat` fragments, never re-derived from the raw
+    bootstrap numbers (`per_type.py` is out of scope to edit or reimplement
+    for this change, same as it is for that route).
+    """
+    if not figures_result.get("available"):
+        reason = figures_result.get("reason")
+        return (
+            "Tow-effect comparison for this type is not yet available"
+            + (f" ({reason})." if reason else ".")
+        )
+    tow = (figures_result.get("figures") or {}).get("tow") or {}
+    conclusion = tow.get("conclusion")
+    if not conclusion:
+        return ("Tow-effect comparison for this type is not yet available "
+                "(no stored conclusion for the tow comparison).")
+    sample_too_small = tow.get("conclusion_key") == "sample_too_small"
+    towed_pct = (tow.get("towed") or {}).get("recurrence_pct")
+    not_towed_pct = (tow.get("not_towed") or {}).get("recurrence_pct")
+    pct_clause = (
+        f" ({towed_pct:.1f} per cent against {not_towed_pct:.1f} per cent)"
+        if not sample_too_small and towed_pct is not None and not_towed_pct is not None
+        else ""
+    )
+    caveat = tow.get("caveat")
+    caveat_clause = f" {caveat[0].upper()}{caveat[1:]}." if not sample_too_small and caveat else ""
+    return f"{conclusion[0].upper()}{conclusion[1:]}{pct_clause}.{caveat_clause}"
+
+
+def _freshness_for_export(conn):
+    """The same clocks `GET /api/freshness` serves (`freshness()` below),
+    read the identical way -- `mirror.status.mirror_freshness` plus
+    `sync.source_edit_history` fed through `_freshness_payload` -- so an
+    export's clocks and the live freshness banner can never disagree about
+    what a lag means. Calls `_freshness_payload`/`status.mirror_freshness` as
+    a black box; nothing here recomputes any of `_call_staleness`/
+    `_behind_reason`/`_next_update_state`/`_next_source_estimate`.
+    """
+    fresh = status.mirror_freshness(conn)
+    history = sync.source_edit_history(conn, status.DATA_LAYER)
+    return _freshness_payload(fresh, history=history)
+
+
+# Readable column headers for the CSV/brief tables, in the abbreviated keys
+# `_doorway_payload`/`_block_payload` already produce -- reusing those
+# functions (rather than re-reading `result["rows"]`/`result["blocks"]`
+# directly) means a CSV/brief cell and the JSON API's own field describe the
+# exact same computed value, never a second rounding or title-casing of it.
+_DOORWAY_CSV_COLUMNS = [
+    ("a", "Address"), ("d", "District"), ("c", "Community"), ("st", "Street"),
+    ("bk", "Block"), ("nb", "Doorways Calling On Block"), ("m", "Calls (12mo)"),
+    ("t", "Calls (Total)"), ("rp", "Repeat Calls"), ("w", "Tows"),
+    ("vd", "Vehicles Distinct"), ("vs", "Vehicles Seen"),
+    ("g", "Median Gap Days"), ("l", "Last Call"), ("o", "Owner"),
+    ("lat", "Latitude"), ("lon", "Longitude"),
+]
+
+_BLOCK_CSV_COLUMNS = [
+    ("bk", "Block"), ("s", "Streets"), ("n", "Doorways"), ("m", "Calls (12mo)"),
+    ("t", "Calls (Total)"), ("w", "Tows"), ("dw", "Dwellings"),
+    ("r", "Calls per 1,000 Dwellings"), ("d", "District"),
+    ("worst", "Worst Doorway"), ("addrs", "Addresses"),
+]
+
+
+def _write_csv_table(writer, columns, payload_rows):
+    """One section of the CSV export: a header row of readable column names,
+    then one row per item in `payload_rows` (already `_doorway_payload`/
+    `_block_payload`-shaped)."""
+    writer.writerow([label for _, label in columns])
+    for row in payload_rows:
+        writer.writerow([
+            "; ".join(row[key]) if key == "addrs" else row.get(key)
+            for key, _ in columns
+        ])
+
+
+def _export_csv_text(canonical, slug, filters, result, freshness_data, figures_result):
+    """Task 7.7's "complete table": one CSV document carrying every one of
+    the task's own verify-clause requirements -- every listed doorway and
+    block row (`result["rows"]`/`result["blocks"]`, the identical
+    `derive_recency.derive_with_recency` output `doorways()`/`blocks()`
+    already read, so a row here and a row in the JSON API can never
+    disagree), the canonical type it covers stated plainly (not left to the
+    URL or a filename to imply), the same clocks `GET /api/freshness` serves,
+    the filter values in effect, and the same six interpretation limits the
+    served page footnotes.
+
+    Shaped as a metadata preamble (`key,value` pairs) followed by a blank row
+    and two data tables ("DOORWAYS", then "BLOCKS") -- a single file stays
+    self-contained (a distributed CSV need not travel alongside the HTML
+    brief to carry all of the above), at the cost of not being one bare
+    rectangular table a naive `pandas.read_csv()` would parse unmodified; a
+    person opening this in a spreadsheet, the stated audience for "a
+    complete table", reads the preamble as a small labelled block above the
+    real table without issue.
+    """
+    buf = io.StringIO()
+    w = csv.writer(buf)
+
+    latest = result["latest"].strftime("%Y-%m-%d") if result["latest"] else None
+
+    w.writerow(["violation_type", canonical])
+    w.writerow(["slug", slug])
+    w.writerow(["doorway_count", len(result["rows"])])
+    w.writerow(["block_count", len(result["blocks"])])
+    w.writerow(["latest_call_date", latest])
+    w.writerow(["recency_note", _recency_note(filters, latest)])
+    w.writerow([])
+
+    w.writerow(["filter: district", filters["district"]])
+    w.writerow(["filter: min_calls", filters["min_calls"]])
+    w.writerow(["filter: min_doorways", filters["min_doorways"]])
+    w.writerow(["filter: recur_days", filters["recur_days"]])
+    w.writerow(["filter: recency_days", filters["recency_days"]])
+    bits = _active_filter_bits(filters)
+    w.writerow(["filters_in_effect",
+                f"Filtered by {', '.join(bits)}." if bits
+                else "Default filters -- none active."])
+    w.writerow([])
+
+    w.writerow(["checked_at", freshness_data["checked_at"]])
+    w.writerow(["most_recent_call_date", freshness_data["most_recent_call_date"]])
+    w.writerow(["last_success_at", freshness_data["last_success_at"]])
+    w.writerow(["last_attempt_at", freshness_data["last_attempt_at"]])
+    w.writerow(["next_due_at", freshness_data["next_due_at"]])
+    w.writerow(["behind_source", freshness_data["behind_source"]])
+    w.writerow(["behind_reason", freshness_data["behind_reason"]])
+    w.writerow(["stale_call_warning",
+                freshness_data["stale_call_warning"]["reason"]
+                or "the most recent call is not stale"])
+    nu = freshness_data["next_update"]
+    w.writerow(["next_update",
+                nu["reason"] if nu["overdue"]
+                else ("not yet known" if not nu["known"] else "on schedule")])
+    w.writerow([])
+
+    w.writerow(["tow_effect", _tow_thesis_sentence(figures_result)])
+    w.writerow([])
+
+    for limit in _INTERPRETATION_LIMITS:
+        w.writerow([f"limit: {limit['id']}", f"{limit['title']} {limit['text']}"])
+    w.writerow([])
+
+    w.writerow(["DOORWAYS"])
+    _write_csv_table(w, _DOORWAY_CSV_COLUMNS, _doorway_payload(result["rows"]))
+    w.writerow([])
+    w.writerow(["BLOCKS"])
+    _write_csv_table(w, _BLOCK_CSV_COLUMNS, _block_payload(result["blocks"]))
+
+    return buf.getvalue()
+
+
+_EXPORT_BRIEF_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ type }} export brief</title>
+<style>
+  body{font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+       max-width:920px;margin:32px auto;padding:0 20px;color:#1a1a1a}
+  a{color:#0b5fa5}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{border:1px solid #ccc;padding:4px 8px;text-align:left}
+  th{background:#f0f0f0}
+  h1{margin-bottom:4px}
+  .meta{color:#444}
+  code{background:#f0f0f0;padding:0 4px;border-radius:3px}
+  ol.limits li{margin-bottom:10px}
+</style>
+</head>
+<body>
+<h1>{{ type }}</h1>
+<p class="meta">Doorway and block list export for the violation type
+<b>{{ type }}</b> (slug <code>{{ slug }}</code>). Generated {{ freshness.checked_at }}.<br>
+<a href="/types/{{ slug }}">Open the live view</a> &middot;
+<a href="/api/types/{{ slug }}/export.csv{{ query_string }}">Download the complete table (CSV)</a></p>
+
+<h2>Filters in effect</h2>
+{% if filter_bits %}
+<p>Filtered by {{ filter_bits|join(", ") }}.</p>
+{% else %}
+<p>Default filters -- none active.</p>
+{% endif %}
+<ul>
+  <li>District: {{ filters.district or "every district" }}</li>
+  <li>Minimum recent calls per doorway: {{ filters.min_calls }}</li>
+  <li>Minimum still-calling doorways per block: {{ filters.min_doorways }}</li>
+  <li>Recurrence window: {{ filters.recur_days }} days</li>
+  <li>Recency window: {{ filters.recency_days }} days</li>
+</ul>
+{% if recency_note %}<p>{{ recency_note }}</p>{% endif %}
+
+<h2>Freshness</h2>
+<ul>
+  <li>Checked at: {{ freshness.checked_at }}</li>
+  <li>Most recent call in the data: {{ freshness.most_recent_call_date or "unknown" }}</li>
+  <li>Last successful sync: {{ freshness.last_success_at or "never" }}</li>
+  <li>Next update due: {{ freshness.next_due_at or "unknown" }}</li>
+  <li>Behind source: {{ freshness.behind_source }}{% if freshness.behind_reason %} -- {{ freshness.behind_reason }}{% endif %}</li>
+  {% if freshness.stale_call_warning.stale %}<li><b>Stale-call warning:</b> {{ freshness.stale_call_warning.reason }}</li>{% endif %}
+  {% if freshness.next_update.overdue %}<li><b>Overdue:</b> {{ freshness.next_update.reason }}</li>{% endif %}
+</ul>
+
+<h2>Tow effect</h2>
+<p>{{ tow_sentence }}</p>
+
+<h2 id="read-carefully">Read these numbers carefully</h2>
+<ol class="limits">
+{% for limit in limits %}  <li id="{{ limit.id }}"><b>{{ limit.title }}</b> {{ limit.text }}</li>
+{% endfor %}</ol>
+
+<h2>Doorways ({{ doorway_count }})</h2>
+{% if doorways %}
+<table>
+<tr>{% for _, label in doorway_columns %}<th>{{ label }}</th>{% endfor %}</tr>
+{% for row in doorways %}<tr>{% for key, _ in doorway_columns %}<td>{{ row[key]|join("; ") if key == "addrs" else row[key] }}</td>{% endfor %}</tr>
+{% endfor %}</table>
+{% else %}
+<p>No doorways match {{ filter_summary_sentence }}.</p>
+{% endif %}
+
+<h2>Blocks ({{ block_count }})</h2>
+{% if blocks %}
+<table>
+<tr>{% for _, label in block_columns %}<th>{{ label }}</th>{% endfor %}</tr>
+{% for row in blocks %}<tr>{% for key, _ in block_columns %}<td>{{ row[key]|join("; ") if key == "addrs" else row[key] }}</td>{% endfor %}</tr>
+{% endfor %}</table>
+{% else %}
+<p>No blocks match {{ filter_summary_sentence }}.</p>
+{% endif %}
+
+</body>
+</html>
+"""
 
 
 # --------------------------------------------------------------- app factory
@@ -848,11 +1350,11 @@ def create_app(conn_factory=None):
 
     @app.get("/api/freshness")
     def freshness():
-        """Tasks 7.1/7.3/7.4a/7.2/7.2a: the four clocks design.md M4 names, plus
-        7.4a's stale-call warning, 7.2's `behind_reason` attribution and
-        7.2a's `next_update` overdue state -- see this module's docstring
-        and `_freshness_payload`'s for the shape and the timezone-normalization
-        rationale. `web/app/index.html`'s header
+        """Tasks 7.1/7.3/7.4a/7.2/7.2a/7.2b: the four clocks design.md M4 names, plus
+        7.4a's stale-call warning, 7.2's `behind_reason` attribution, 7.2a's
+        `next_update` overdue state and 7.2b's `next_source_estimate` -- see
+        this module's docstring and `_freshness_payload`'s for the shape and
+        the timezone-normalization rationale. `web/app/index.html`'s header
         banner and footer read this on every view; no route parameter, no
         per-type distinction -- the mirror has one set of these clocks
         regardless of which canonical type a viewer is looking at.
@@ -860,9 +1362,92 @@ def create_app(conn_factory=None):
         conn = connect()
         try:
             fresh = status.mirror_freshness(conn)
+            history = sync.source_edit_history(conn, status.DATA_LAYER)
         finally:
             conn.close()
-        return jsonify(_freshness_payload(fresh))
+        return jsonify(_freshness_payload(fresh, history=history))
+
+    @app.get("/api/types/<slug>/export.csv")
+    def export_csv(slug):
+        """Task 7.7's "complete table": see `_export_csv_text`'s docstring for
+        what one file carries and why it is shaped as a metadata preamble
+        plus two data tables rather than a single bare rectangular list.
+        Same five filters as `doorways()`/`blocks()` above
+        (`_filters_from_request()`), and the same 404 behaviour
+        (`jsonify(error="untracked", ...)`) as every other `/api/...` route
+        in this module -- this is one of those, not a `/types/...` page
+        route.
+        """
+        canonical = _canonical_for_slug(slug)
+        if canonical is None:
+            return jsonify(error="untracked", slug=slug), 404
+        filters = _filters_from_request()
+        conn = connect()
+        try:
+            result = derive_recency.derive_with_recency(
+                conn, canonical_type=canonical, **filters,
+            )
+            freshness_data = _freshness_for_export(conn)
+            figures_result = type_figures.figures_for(conn, canonical)
+        finally:
+            conn.close()
+        csv_text = _export_csv_text(
+            canonical, slug, filters, result, freshness_data, figures_result,
+        )
+        return Response(
+            csv_text, mimetype="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="{slug}-export.csv"',
+            },
+        )
+
+    @app.get("/types/<slug>/export")
+    def export_brief(slug):
+        """Task 7.7's "readable brief": a server-rendered HTML page --
+        `_untracked_type_page`'s own `render_template_string` pattern (design.md
+        M12 rules out a build step, so there is no per-type file to generate)
+        rather than a downloadable file. Carries the same six things
+        `export_csv` above does: every listed doorway and block row for the
+        type/filter combination in effect, the canonical type stated plainly,
+        the same clocks `GET /api/freshness` serves, the filter values in
+        effect, the same tow-effect sentence the served page's `#tow-thesis`
+        shows, and the same six interpretation limits from its footer. Same
+        filters (`_filters_from_request()`), and the same 404 behaviour as
+        `/types/<slug>` (`_untracked_type_page`), since this is a page route,
+        not an `/api/...` one.
+        """
+        canonical = _canonical_for_slug(slug)
+        if canonical is None:
+            return _untracked_type_page(slug), 404
+        filters = _filters_from_request()
+        conn = connect()
+        try:
+            result = derive_recency.derive_with_recency(
+                conn, canonical_type=canonical, **filters,
+            )
+            freshness_data = _freshness_for_export(conn)
+            figures_result = type_figures.figures_for(conn, canonical)
+        finally:
+            conn.close()
+
+        latest = result["latest"].strftime("%Y-%m-%d") if result["latest"] else None
+        doorway_rows = _doorway_payload(result["rows"])
+        block_rows = _block_payload(result["blocks"])
+        qs = request.query_string.decode()
+        return render_template_string(
+            _EXPORT_BRIEF_TEMPLATE,
+            type=canonical, slug=slug, filters=filters,
+            filter_bits=_active_filter_bits(filters),
+            filter_summary_sentence=(_active_filter_summary(filters) or "the current filters"),
+            recency_note=_recency_note(filters, latest),
+            freshness=freshness_data,
+            tow_sentence=_tow_thesis_sentence(figures_result),
+            limits=_INTERPRETATION_LIMITS,
+            doorway_count=len(doorway_rows), block_count=len(block_rows),
+            doorways=doorway_rows, blocks=block_rows,
+            doorway_columns=_DOORWAY_CSV_COLUMNS, block_columns=_BLOCK_CSV_COLUMNS,
+            query_string=(f"?{qs}" if qs else ""),
+        )
 
     return app
 
