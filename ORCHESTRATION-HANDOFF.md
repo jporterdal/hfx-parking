@@ -5,6 +5,18 @@
 `dispatch-plan.md` holds the dependency DAG; this file holds *state* — what is done, what is in
 flight, and the conventions the pools have been run under.
 
+## POOL 12 DISPATCHED (2026-09-18, fresh 5-hour window) — supersedes "no workers are running" below
+
+State verified before dispatch: tree clean at `6347c79`, suite green (8 strict xfails), `openspec validate
+--strict` clean. Two Sonnet workers, disjoint files: **I'** (9.2 defects C, D; 9.6 changed-time race E:
+`server.py`, `index.html`, `src/mirror/triage.py`, `tests/test_verify_unreachable_and_overdue.py`,
+`tests/test_verify_shared_triage.py`) and **J'** (9.4 served-vs-live comparison; concern 24, which J' may
+fix in `src/mirror/per_type.py` with a test; `tests/test_verify_served_matches_derive.py`). User decisions
+this session: one more live run against HRM is allowed only if the freshness gate shows the mirror has
+advanced (1 of max 2 already used); concern 24 is to be FIXED with a test if confirmed; concerns 16, 17,
+20, 21 stay with the user. If this note is still here and no workers are running, the session was
+interrupted: verify with `git status`/`git diff`, per "Read this first".
+
 ## STOPPED MID-CHANGE — Pool 11 was cut short by the user's usage limit (2026-09-18)
 
 **No workers are running.** Pool 11 (Worker I: 9.2's defects and 9.6's race; Worker J: task 9.4) was
