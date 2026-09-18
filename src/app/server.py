@@ -63,8 +63,9 @@ Route table:
                                          `{checked_at, most_recent_call_date,
                                          last_success_at, last_attempt_at,
                                          next_due_at, behind_source,
-                                         behind_reason, stale_call_warning}` --
-                                         tasks 7.1/7.2/7.4a, see below
+                                         behind_reason, stale_call_warning,
+                                         next_update}` -- tasks
+                                         7.1/7.2/7.2a/7.4a, see below
 
 Every list is computed per request from the mirror via `mirror.derive.derive`
 (design.md M11) -- nothing here materializes a doorway or block list ahead of a
@@ -138,7 +139,7 @@ does not change what one request computes: it is still exactly one
 calls `derive_all()` or loops over `_SLUG_TO_CANONICAL` to answer one
 request.
 
-**Tasks 7.1/7.3/7.4a/7.2: freshness is served, not asserted.** `GET
+**Tasks 7.1/7.3/7.4a/7.2/7.2a: freshness is served, not asserted.** `GET
 /api/freshness` is a thin wrapper over `mirror.status.mirror_freshness` (task
 3.3's four clocks) and `mirror.status.layer_freshness`'s `behind_source`
 verdict (task 3.4) -- nothing here recomputes what that module already
@@ -151,7 +152,12 @@ and that is exactly the case this warns about. `_behind_reason` (task 7.2) is
 the other half of "whose limit is it": it reads `layer_freshness`'s own
 per-layer `behind_reason` text back out of the aggregate so a viewer is told
 which system owns a lag -- HRM's publishing schedule, or this sync itself --
-rather than a bare `behind_source` boolean with no attribution.
+rather than a bare `behind_source` boolean with no attribution. `_next_update_state`
+(task 7.2a) is a third addition, and a different axis again: whether the
+*sync itself* has missed its own polling schedule (`sync.POLL_INTERVAL`) by
+more than a grace period, with nothing successful since -- turning
+`next_due_at` from a rendered date that would keep looking healthy forever
+into an explicit `overdue` state (design.md M4).
 
 `web/app/index.html`'s header banner (`#freshness`) and footer
 (`#footer-sync-date`) fetch this route and are what makes 7.1's "last
@@ -206,7 +212,7 @@ from flask import (  # noqa: E402
 )
 
 from mirror import (  # noqa: E402
-    db, derive_recency, status, triage, type_figures, violation_types,
+    db, derive_recency, status, sync, triage, type_figures, violation_types,
 )
 
 WEB_DIR = _REPO_ROOT / "web"
@@ -510,6 +516,73 @@ def _behind_reason(freshness):
     return not_behind["behind_reason"] if not_behind else None
 
 
+# Task 7.2a: how long the sync's own schedule can be missed before the
+# next-update promise reads as overdue rather than as a future date that
+# never arrives (design.md M4: "'next update' is a promise, and promises
+# rot ... the next-sync display is a state machine, not a string"). The
+# grace period is grounded in `sync.POLL_INTERVAL` (currently one day) --
+# the sync's *own* polling cadence -- rather than picked independently, per
+# design.md's open question ("depends on the observed cadence, so it
+# follows from the question above rather than being set independently").
+# This is a different cadence from `STALE_CALL_WARNING_DAYS` (7.4a's 21
+# days): that one is about HRM's roughly-weekly publish schedule going
+# quiet; this one is about *this sync* missing its own nightly poll. One
+# full extra `POLL_INTERVAL` is allowed past the due time, so a poll that
+# lands a few hours late, or a due time that falls right at a schedule
+# boundary, does not flip the banner to overdue the moment it passes --
+# missing the *following* scheduled poll too is what overdue means here.
+NEXT_UPDATE_GRACE_PERIOD = sync.POLL_INTERVAL
+
+
+def _next_update_state(freshness, now=None):
+    """Task 7.2a: the next-sync clock as a state machine, not a rendered
+    date. `next_due_at` alone keeps looking like a healthy future promise
+    forever once the scheduler that keeps it has died -- this turns "has
+    the due time passed by the grace period, with nothing successful
+    since" into an explicit `overdue` boolean the client branches on,
+    rather than re-deriving the arithmetic (and its boundary) in
+    JavaScript.
+
+    Reads `freshness["next_due_at"]`/`["last_success_at"]` -- the same
+    aggregate `mirror.status.mirror_freshness` already computes (earliest
+    due time, earliest success, across the currency layers) -- rather than
+    recomputing anything per layer.
+    """
+    now = (now or datetime.datetime.now(datetime.timezone.utc)).astimezone(datetime.timezone.utc)
+    grace_days = NEXT_UPDATE_GRACE_PERIOD.total_seconds() / 86400
+    next_due_at = freshness.get("next_due_at")
+    if next_due_at is None:
+        return {
+            "known": False, "overdue": False, "days_overdue": None,
+            "grace_period_days": grace_days,
+            "reason": "no sync has ever recorded a due time",
+        }
+    next_due_at = next_due_at.astimezone(datetime.timezone.utc)
+    overdue_at = next_due_at + NEXT_UPDATE_GRACE_PERIOD
+    last_success_at = freshness.get("last_success_at")
+    # Defends against the aggregate combining two different currency
+    # layers' clocks (mirror_freshness's next_due_at is the earliest across
+    # layers, last_success_at likewise but not necessarily from the same
+    # layer): only a success recorded at or after the due time in question
+    # counts as "no successful sync since."
+    succeeded_since_due = (
+        last_success_at is not None
+        and last_success_at.astimezone(datetime.timezone.utc) >= next_due_at
+    )
+    overdue = now > overdue_at and not succeeded_since_due
+    return {
+        "known": True,
+        "overdue": overdue,
+        "days_overdue": round((now - overdue_at).total_seconds() / 86400, 1) if overdue else None,
+        "grace_period_days": grace_days,
+        "reason": (
+            f"the sync was due {round((now - next_due_at).total_seconds() / 86400, 1)} "
+            f"days ago and has not completed successfully since, past the "
+            f"{round(grace_days, 1)}-day grace period"
+        ) if overdue else None,
+    }
+
+
 def _freshness_payload(freshness, now=None):
     """The `GET /api/freshness` JSON body: a thin reshaping of
     `mirror.status.mirror_freshness`'s dict (every field except
@@ -526,6 +599,7 @@ def _freshness_payload(freshness, now=None):
         "behind_source": freshness["behind_source"],
         "behind_reason": _behind_reason(freshness),
         "stale_call_warning": _call_staleness(freshness["most_recent_call_date"], now=now),
+        "next_update": _next_update_state(freshness, now=now),
     }
 
 
@@ -774,10 +848,11 @@ def create_app(conn_factory=None):
 
     @app.get("/api/freshness")
     def freshness():
-        """Tasks 7.1/7.3/7.4a: the four clocks design.md M4 names, plus 7.4a's
-        stale-call warning and 7.2's `behind_reason` attribution -- see this
-        module's docstring and `_freshness_payload`'s for the shape and the
-        timezone-normalization rationale. `web/app/index.html`'s header
+        """Tasks 7.1/7.3/7.4a/7.2/7.2a: the four clocks design.md M4 names, plus
+        7.4a's stale-call warning, 7.2's `behind_reason` attribution and
+        7.2a's `next_update` overdue state -- see this module's docstring
+        and `_freshness_payload`'s for the shape and the timezone-normalization
+        rationale. `web/app/index.html`'s header
         banner and footer read this on every view; no route parameter, no
         per-type distinction -- the mirror has one set of these clocks
         regardless of which canonical type a viewer is looking at.

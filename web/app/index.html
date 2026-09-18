@@ -147,8 +147,13 @@ footer h3{font-family:"Barlow Condensed",sans-serif;font-size:14px;letter-spacin
    .stale (7.4a's HRM-has-gone-quiet case) -- both are lags worth flagging
    visually, and the two states are mutually exclusive in the boot() fetch
    below, so styling them alike does not blur the wording that tells them
-   apart. */
-.freshness.stale,.freshness.behind{border-color:var(--alert);background:var(--alert-soft);color:var(--ink)}
+   apart. .overdue (task 7.2a): the sync has missed its own schedule by more
+   than its grace period with nothing successful since -- a state, not a
+   rendered date that never arrives -- and gets the same alert treatment;
+   it can co-occur with .behind (both name a defect in this sync) but not
+   with plain .stale (HRM going quiet does not by itself mean this sync
+   missed its own poll). */
+.freshness.stale,.freshness.behind,.freshness.overdue{border-color:var(--alert);background:var(--alert-soft);color:var(--ink)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
 /* ---- map ---- */
@@ -462,6 +467,17 @@ canvas#cv{display:block;width:100%;height:100%}
          `derive_recency` feeds `hotspots.build()` -- see that module's own
          docstring on why the two differ). -->
     <span class="count" id="recency-note"></span>
+    <!-- Task 5.5d: unlike #recency-note above (7.4, states the recency
+         window unconditionally -- the default window is itself a window)
+         and unlike filterSummary() (5.5e, names all five filter values but
+         only when a combination excludes every row), this states which
+         filters, if any, have been moved off their defaults, on every
+         non-empty list too -- so a filtered, non-empty view (e.g.
+         min_calls=5 back with 12 doorways) cannot be mistaken for the
+         unfiltered default just because the list itself isn't empty. Empty
+         when nothing has been moved off default (the common case); filled
+         in render() from activeFilterSummary(). -->
+    <span class="count" id="filters-note"></span>
     <label for="sort">Sort by <select id="sort" aria-label="Sort the list"></select></label>
   </div>
 <div class="rows">
@@ -670,7 +686,7 @@ const FILTERS = doorPayload.filters || {};
   });
 })();
 
-/* Tasks 7.1/7.3/7.4a: freshness is served, not asserted (design.md M4).
+/* Tasks 7.1/7.3/7.4a/7.2a: freshness is served, not asserted (design.md M4).
  * Independent of the map/doorway/block fetches above for the same reason the
  * type-switcher fetch is -- a slow or failed /api/freshness must not block
  * the list a viewer actually asked for. Fills the header banner (#freshness,
@@ -690,10 +706,21 @@ const FILTERS = doorPayload.filters || {};
     const f = await resp.json();
     const lastSync = fmt(f.last_success_at);
     const nextDue = fmt(f.next_due_at);
+    /* Task 7.2a: "next update" is a promise, and a rendered future date
+     * keeps looking healthy forever if the scheduler that keeps it has
+     * died (design.md M4). `f.next_update.overdue` is the server's state
+     * check (`_next_update_state`, src/app/server.py) -- the due time has
+     * passed by its grace period with no successful sync since -- so this
+     * client never re-derives that arithmetic, only branches on it. */
+    const nextUpdate = f.next_update || {};
     const parts = [
       lastSync ? `Last updated ${lastSync}.` : "This mirror has not completed a sync yet.",
-      nextDue ? `Next update expected ${nextDue}.` : "Next update time not yet known.",
+      nextUpdate.overdue
+        ? `Next update is overdue: it was due ${nextDue || "earlier"} and no sync `
+          + "has completed successfully since."
+        : (nextDue ? `Next update expected ${nextDue}.` : "Next update time not yet known."),
     ];
+    if (nextUpdate.overdue && header) header.classList.add("overdue");
     const warning = f.stale_call_warning;
     /* Task 7.2: a lag reads as one system's limit, not a vague "something is
      * behind" -- `behind_source` (this sync has not pulled data HRM already
@@ -1205,6 +1232,43 @@ function filterSummary(){
   return bits.join(", ");
 }
 
+/* Task 5.5d: `filterSummary()` above always lists all five filters -- right
+ * for naming what excluded every row (5.5e), since a departure from any one
+ * of them could be the cause. This answers a narrower, separate question:
+ * which filters, if any, actually differ from their default right now --
+ * `FILTER_DEFAULTS` mirrors src/app/server.py's `_FILTER_DEFAULTS` exactly
+ * (district has no numeric default; an empty/absent value there already
+ * means "no district selected"). The per-filter phrasing is deliberately
+ * copied from filterSummary() rather than shared with it, so 5.5e's
+ * always-list-five wording and this always-list-only-what-changed wording
+ * stay independently correct even if one is edited later.
+ *
+ * `activeFilterBits()`/`activeFilterSummary()` read only `FILTERS` (the
+ * query-string-echoed values `doorPayload.filters` already carries) and
+ * `FILTER_DEFAULTS`, both plain, inspectable data -- a future export (task
+ * 7.7) can call `activeFilterSummary()` directly, or read `FILTERS` and
+ * `FILTER_DEFAULTS` itself, to state the same "filtered by ..." line on an
+ * exported table/brief without re-deriving the phrasing. */
+const FILTER_DEFAULTS = {min_calls: 2, min_doorways: 2, recency_days: 365, recur_days: 365};
+
+function activeFilterBits(){
+  const bits = [];
+  if (FILTERS.district) bits.push(`district ${FILTERS.district}`);
+  if (Number(FILTERS.min_calls) !== FILTER_DEFAULTS.min_calls)
+    bits.push(`min. recent calls ≥ ${FILTERS.min_calls}`);
+  if (Number(FILTERS.min_doorways) !== FILTER_DEFAULTS.min_doorways)
+    bits.push(`min. calling doorways/block ≥ ${FILTERS.min_doorways}`);
+  if (Number(FILTERS.recency_days) !== FILTER_DEFAULTS.recency_days)
+    bits.push(`recency window ≤ ${FILTERS.recency_days} days`);
+  if (Number(FILTERS.recur_days) !== FILTER_DEFAULTS.recur_days)
+    bits.push(`recurrence window ≤ ${FILTERS.recur_days} days`);
+  return bits;
+}
+
+function activeFilterSummary(){
+  return activeFilterBits().join(", ");
+}
+
 function render(){
   el("clear-filters").hidden = !(f.district || f.status !== "all" || f.q);
   const v = items(), V = VOCAB();
@@ -1225,6 +1289,17 @@ function render(){
     recencyNote.textContent = doorPayload.latest
       ? `Showing calls from the last ${FILTERS.recency_days} days, since ${doorPayload.latest}.`
       : "";
+  }
+  // Task 5.5d: on every list -- not only the empty case filterSummary()
+  // already names (5.5e) -- state which filters, if any, differ from
+  // their default, so a non-empty filtered view (e.g. min_calls=5 back
+  // with 12 doorways, no different in shape from the unfiltered default)
+  // cannot be mistaken for the default list. Empty text, not a hidden
+  // element, when nothing has been moved off default -- the common case.
+  const filtersNote = el("filters-note");
+  if (filtersNote){
+    const bits = activeFilterBits();
+    filtersNote.textContent = bits.length ? `Filtered by ${bits.join(", ")}.` : "";
   }
   el("maptitle").textContent = mode === "block"
     ? "Halifax street network \u00b7 census blocks" : "Halifax street network \u00b7 doorways";

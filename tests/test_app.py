@@ -1340,6 +1340,65 @@ def test_index_page_states_the_recency_windows_anchor_date_and_length(client):
     )
 
 
+def test_index_page_states_which_filters_are_off_default_on_every_list(client):
+    """Task 5.5d: unlike #recency-note (7.4, states the recency window
+    unconditionally) and unlike filterSummary() (5.5e, only fires when a
+    combination excludes every row), a *non-empty*, *non-default* view --
+    e.g. min_calls=5 back with rows still listed -- said nothing
+    distinguishing it from the unfiltered default until this task.
+    `activeFilterBits()`/`activeFilterSummary()` name only the filters that
+    differ from `FILTER_DEFAULTS`, wired to `#filters-note` and filled from
+    render(); a future export (task 7.7) can reuse `activeFilterSummary()`
+    (or read `FILTERS`/`FILTER_DEFAULTS` itself) to state the same
+    "filtered by ..." line without re-deriving the phrasing.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert 'id="filters-note"' in body
+    assert "function activeFilterBits(){" in body
+    assert "function activeFilterSummary(){" in body
+    assert 'bits.length ? `Filtered by ${bits.join(", ")}.` : ""' in body
+
+    # The client-side defaults compared against must match the server's own
+    # `_FILTER_DEFAULTS` (src/app/server.py) exactly, or a value the server
+    # falls back to as "default" could still read as "filtered" client-side.
+    assert app_server._FILTER_DEFAULTS == {
+        "min_calls": 2, "min_doorways": 2, "recur_days": 365, "recency_days": 365,
+    }
+    assert (
+        "const FILTER_DEFAULTS = "
+        "{min_calls: 2, min_doorways: 2, recency_days: 365, recur_days: 365};"
+    ) in body
+
+
+def test_default_and_widened_requests_carry_distinguishable_filters(client, clean_db):
+    """Task 5.5d's own verification clause: a filtered, non-empty view must
+    not be mistaken for the default list. This proves the server-side half
+    over real HTTP -- the same `filters` key `activeFilterBits()` reads
+    client-side to decide whether to say anything at all. A default request
+    echoes back exactly `FILTER_DEFAULTS` (so `activeFilterBits()` yields no
+    bits, and `#filters-note` stays empty); a request with `min_calls=5`
+    echoes back a `filters.min_calls` that differs from the default even
+    though it lists doorways rather than excluding all of them (contrast
+    with test_min_calls_query_param_changes_the_doorway_list_over_http and
+    5.5e's empty-result path, which only names filters once nothing is
+    left).
+    """
+    seed_two_doorway_block(clean_db)  # two doorways, two calls each, min_calls=2 clears both
+
+    default_resp = client.get("/api/types/blocking-driveway/doorways").get_json()
+    widened_resp = client.get(
+        "/api/types/blocking-driveway/doorways?min_calls=1"
+    ).get_json()
+
+    assert default_resp["filters"] == app_server._FILTER_DEFAULTS | {"district": None}
+    assert len(default_resp["rows"]) == 2
+
+    assert widened_resp["filters"]["min_calls"] == 1
+    assert widened_resp["filters"] != default_resp["filters"]
+    assert len(widened_resp["rows"]) == 2  # non-empty: the case 5.5e's naming does not cover
+
+
 # --------------------------------------------------------- type figures (5.7/5.8)
 
 
@@ -1444,7 +1503,7 @@ def test_freshness_route_reports_the_four_clocks(client, clean_db):
     assert set(payload) == {
         "checked_at", "most_recent_call_date", "last_success_at",
         "last_attempt_at", "next_due_at", "behind_source", "behind_reason",
-        "stale_call_warning",
+        "stale_call_warning", "next_update",
     }
     # Parsed back to the same instant regardless of the offset the string
     # carries -- this is the check that would have caught the discarded
@@ -1490,6 +1549,8 @@ def test_freshness_route_with_no_sync_history_does_not_crash(client, clean_db):
         "threshold_days": app_server.STALE_CALL_WARNING_DAYS,
         "reason": "the mirror holds no calls yet",
     }
+    assert payload["next_update"]["known"] is False
+    assert payload["next_update"]["overdue"] is False
 
 
 def test_freshness_warns_when_the_newest_call_is_materially_stale(client, clean_db):
@@ -1609,6 +1670,160 @@ def test_served_page_attributes_lag_to_the_owning_system_in_both_directions(clie
     assert "of HRM's own publishing schedule, not a problem with this mirror" in body
     assert "This mirror has fallen behind HRM" in body
     assert "not to HRM's publishing schedule" in body
+
+
+# ------------------------------------------------- 7.2a next-update overdue state
+
+
+def test_next_update_reads_overdue_once_the_grace_period_has_passed_with_no_success(
+        client, clean_db):
+    """The scenario 7.2a exists for: a scheduler that has died. `next_due_at`
+    sits well in the past (5 days ago) and no sync has succeeded since --
+    not even at the due time itself -- so this must read as `overdue`, not
+    keep showing a future-dated promise that never arrived."""
+    now = datetime.datetime.now(datetime.UTC)
+    due = now - datetime.timedelta(days=5)
+    last_success = due - datetime.timedelta(days=1)
+    for layer in ("service_requests", "custom_fields"):
+        set_layer_state(clean_db, layer, source_last_edit=last_success,
+                         last_attempt_at=last_success, last_attempt_ok=True,
+                         last_success_at=last_success, next_due_at=due)
+
+    payload = client.get("/api/freshness").get_json()
+
+    next_update = payload["next_update"]
+    assert next_update["known"] is True
+    assert next_update["overdue"] is True
+    assert next_update["days_overdue"] > 0
+    assert "grace period" in next_update["reason"]
+
+
+def test_next_update_is_healthy_when_next_due_at_is_in_the_future(client, clean_db):
+    """The ordinary case: the sync is on schedule, `next_due_at` is tomorrow,
+    and the last success is recent. Must not read as overdue."""
+    now = datetime.datetime.now(datetime.UTC)
+    due = now + datetime.timedelta(days=1)
+    for layer in ("service_requests", "custom_fields"):
+        set_layer_state(clean_db, layer, source_last_edit=now,
+                         last_attempt_at=now, last_attempt_ok=True,
+                         last_success_at=now, next_due_at=due)
+
+    payload = client.get("/api/freshness").get_json()
+
+    next_update = payload["next_update"]
+    assert next_update["known"] is True
+    assert next_update["overdue"] is False
+    assert next_update["days_overdue"] is None
+    assert next_update["reason"] is None
+
+
+def test_next_update_is_healthy_when_past_due_but_still_within_the_grace_period(
+        client, clean_db):
+    """`next_due_at` is 6 hours in the past -- late, but well inside the
+    one-day (`sync.POLL_INTERVAL`) grace period `_next_update_state` grounds
+    itself in -- so this must still read as healthy, not overdue. Without
+    this case, a state machine that only ever fires "overdue" the instant
+    the due time passes would flag a poll that is merely a few hours behind
+    schedule, which is exactly the ordinary jitter the grace period exists
+    to absorb."""
+    now = datetime.datetime.now(datetime.UTC)
+    due = now - datetime.timedelta(hours=6)
+    for layer in ("service_requests", "custom_fields"):
+        set_layer_state(clean_db, layer, source_last_edit=due,
+                         last_attempt_at=due, last_attempt_ok=True,
+                         last_success_at=due, next_due_at=due)
+
+    payload = client.get("/api/freshness").get_json()
+
+    assert payload["next_update"]["overdue"] is False
+
+
+def test_next_update_known_is_false_with_no_recorded_due_time(client, clean_db):
+    """A store no sync has ever touched knows no due time at all -- reported
+    as a state of knowledge (`known: False`), not as overdue or healthy by
+    a default that would be a guess."""
+    payload = client.get("/api/freshness").get_json()
+
+    next_update = payload["next_update"]
+    assert next_update["known"] is False
+    assert next_update["overdue"] is False
+    assert next_update["reason"] == "no sync has ever recorded a due time"
+
+
+# The boundary itself, called directly against `_next_update_state` with an
+# explicit `now` rather than through the route's real wall clock -- the same
+# reason `test_derive_recency.py`'s boundary tests call `derive_with_recency`
+# directly with constructed instants instead of trusting the arithmetic from
+# a distance. `_call_staleness`'s `>` (not `>=`) convention is mirrored here:
+# exactly at the grace deadline is not yet overdue, one second past it is.
+def _fresh(next_due_at, last_success_at):
+    return {"next_due_at": next_due_at, "last_success_at": last_success_at}
+
+
+def test_next_update_boundary_exactly_at_the_grace_deadline_is_not_yet_overdue():
+    due = datetime.datetime(2026, 9, 1, tzinfo=datetime.UTC)
+    last_success = due - datetime.timedelta(days=1)
+    overdue_at = due + app_server.NEXT_UPDATE_GRACE_PERIOD
+
+    result = app_server._next_update_state(_fresh(due, last_success), now=overdue_at)
+
+    assert result["overdue"] is False
+
+
+def test_next_update_boundary_one_second_past_the_grace_deadline_is_overdue():
+    due = datetime.datetime(2026, 9, 1, tzinfo=datetime.UTC)
+    last_success = due - datetime.timedelta(days=1)
+    overdue_at = due + app_server.NEXT_UPDATE_GRACE_PERIOD
+
+    result = app_server._next_update_state(
+        _fresh(due, last_success), now=overdue_at + datetime.timedelta(seconds=1))
+
+    assert result["overdue"] is True
+
+
+def test_next_update_a_success_recorded_at_the_due_time_counts_as_since():
+    """`succeeded_since_due` uses `>=`, not `>`: a success landing exactly at
+    the due time counts as "since" -- so even long after the grace deadline
+    has passed by the wall clock, this must not read as overdue, because the
+    sync did in fact succeed at (or after) the moment it was due."""
+    due = datetime.datetime(2026, 9, 1, tzinfo=datetime.UTC)
+    far_future = due + app_server.NEXT_UPDATE_GRACE_PERIOD + datetime.timedelta(days=30)
+
+    result = app_server._next_update_state(_fresh(due, due), now=far_future)
+
+    assert result["overdue"] is False
+
+
+def test_next_update_a_success_one_second_before_the_due_time_does_not_count():
+    """The other side of the same boundary: a success one second *before*
+    the due time is not "since" -- this is the ordinary shape of an overdue
+    sync (its last success predates the due time it then missed), and must
+    still read as overdue past the grace deadline."""
+    due = datetime.datetime(2026, 9, 1, tzinfo=datetime.UTC)
+    last_success = due - datetime.timedelta(seconds=1)
+    far_future = due + app_server.NEXT_UPDATE_GRACE_PERIOD + datetime.timedelta(days=30)
+
+    result = app_server._next_update_state(_fresh(due, last_success), now=far_future)
+
+    assert result["overdue"] is True
+
+
+def test_served_page_shows_overdue_state_instead_of_a_stale_future_promise(client):
+    """Task 7.2a's client-side wiring lives in `web/app/index.html`'s boot()
+    fetch, which Python tests cannot execute -- so this pins the overdue
+    branch as static text/behaviour in the served script, the same way
+    `test_served_page_attributes_lag_to_the_owning_system_in_both_directions`
+    pins 7.2's wording. Must read `f.next_update.overdue` (the server's
+    state, not a client-side re-derivation of the due-time arithmetic) and
+    must apply a distinct `overdue` class, styled like the existing
+    `.stale`/`.behind` alert treatment."""
+    body = client.get("/").get_data(as_text=True)
+
+    assert "next_update" in body
+    assert "nextUpdate.overdue" in body
+    assert "Next update is overdue" in body
+    assert 'classList.add("overdue")' in body
+    assert ".freshness.overdue" in body or ",.freshness.overdue" in body
 
 
 def test_freshness_route_is_reachable_with_no_type_scoping(client):
