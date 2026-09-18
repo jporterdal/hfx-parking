@@ -103,7 +103,9 @@ checkpoint, in the same commit or the one straight after**, not later.
    and that it "needs one"). It decides whether 8.7 deletes the template and `write_board()` or keeps
    `hotspots.py`'s standalone board as an artefact. `src/app/server.py` imports functions from
    `hotspots.py`, so the module itself stays either way; only its `main()` and the `out/` outputs are
-   in question. **Do not dispatch 8.7 until the user has made this call.**
+   in question. **Resolved by the user:** retire `web/template.html` once its functionality is confirmed
+   present in the served page, and record in the docs the last commit that still contains it. 8.7 is
+   released; see the pool notes below.
 7. **7.5's dwelling-rate/block-label footnotes only reach the header stats**, not the actual figures
    in the results list/detail panel (`evidenceBlock()`) — that region belonged to a different agent
    this pool. A follow-up should add the same `#lim-dwelling`/`#lim-block-label` links there.
