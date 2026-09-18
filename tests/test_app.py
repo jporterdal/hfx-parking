@@ -24,6 +24,7 @@ import json
 import re
 import shutil
 import subprocess
+import zoneinfo
 
 import pytest
 
@@ -191,8 +192,9 @@ def test_index_served_at_root_with_no_auth_and_no_build_step(client):
     assert "text/html" in resp.content_type
     assert "WWW-Authenticate" not in resp.headers
     body = resp.get_data(as_text=True)
-    # No leftover write_board() placeholders -- this page is fed by the API,
-    # not filled at generation time (see web/app/index.html's header comment).
+    # No leftover write_board() placeholders (the retired generator's
+    # __DATA__/__MAP__ tokens) -- this page is fed by the API, not filled at
+    # generation time (see web/app/index.html's header comment).
     # (The header comment itself names these tokens in prose, so the check is
     # for the literal unfilled JS construct, not a bare substring match.)
     assert "const DATA = __DATA__" not in body
@@ -470,8 +472,9 @@ def test_doorways_api_returns_seeded_rows_for_the_default_type(client, clean_db)
     assert data["latest"] == "2026-05-29"
     addresses = {r["a"] for r in data["rows"]}
     assert addresses == {"1 First St", "2 Second St"}  # hotspots.clean_address + .title()
-    # Same abbreviated-key shape write_board's page_rows uses, so
-    # web/app/index.html's script (copied from web/template.html) needs no change.
+    # Same abbreviated-key shape the retired write_board's page_rows used, so
+    # web/app/index.html's script (copied from the retired web/template.html,
+    # last present at b04731c) needs no change.
     # "rp" (repeat_calls) is one addition beyond that shape, task 5.5c's own:
     # the one figure the recurrence window governs, exposed so a viewer (and
     # a test, over real HTTP) can observe recur_days changing it without
@@ -2940,6 +2943,104 @@ def test_the_agreement_check_rejects_a_brief_heading_one_too_high(
 
     with pytest.raises(AssertionError, match="counts: brief headings vs view"):
         _assert_view_and_exports_agree(_gather(client, "blocking-driveway"))
+
+
+# ------------------------- an export names one mirror state (7.8's race caveat)
+#
+# Both export routes read a type's rows and the mirror's clocks (last sync, newest
+# call) in separate queries. On Postgres' default READ COMMITTED each query sees
+# whatever is committed at that instant, so a sync committing between the two
+# reads gave an export whose rows came from one mirror state and whose named
+# clocks came from the next. `_pin_snapshot` reads both from one REPEATABLE READ
+# snapshot. The test lands a second connection's sync between the two reads, on
+# purpose, rather than hoping a real request hits the window.
+
+HALIFAX = zoneinfo.ZoneInfo("America/Halifax")
+# 02:30 UTC on 30 May is 23:30 ADT on 29 May: this call's UTC date is not its
+# Halifax date, so comparing the two as strings (or as dates without converting)
+# gets the answer wrong. `derive` states the newest call as a Halifax date, the
+# clocks state it as a UTC instant.
+LATE_EVENING_CALL = datetime.datetime(2026, 5, 30, 2, 30, tzinfo=datetime.UTC)
+
+# Per sync: (doorways listed, newest call as a Halifax date). Worked out from
+# `_seed_first_sync_state` / `_seed_second_sync_state`, not read back from the app.
+_STATE_OF_SYNC = {T1: (2, "2026-05-29"), T2: (5, "2026-06-01")}
+
+
+def _seed_first_sync_ending_in_a_late_evening_call(conn):
+    _seed_first_sync_state(conn)
+    seed_driveway_call(conn, 7101, "2 SECOND ST, HALIFAX", LATE_EVENING_CALL)
+
+
+def _state_named_by_csv(text):
+    meta = _csv_metadata(text)
+    _, doors = _csv_section(text, "DOORWAYS")
+    return {"doorways": len(doors), "latest_call_date": meta["latest_call_date"],
+            "last_success_at": meta["last_success_at"],
+            "most_recent_call_date": meta["most_recent_call_date"]}
+
+
+def _state_named_by_brief(body):
+    brief = _parse_brief(body)
+    items = brief.list_items()
+    _, doors = brief.table_for("doorways")
+    since = [m.group(1) for p in brief.p if (m := re.search(r"since (\d{4}-\d\d-\d\d)\.", p))]
+    assert len(since) == 1, "the brief states its data date exactly once"
+    return {"doorways": len(doors), "latest_call_date": since[0],
+            "last_success_at": items["Last successful sync"],
+            "most_recent_call_date": items["Most recent call in the data"]}
+
+
+def _assert_rows_and_clocks_are_one_mirror_state(named):
+    """The rows an export lists and the clocks it names must belong to the same
+    sync. Instants are parsed, never compared as strings."""
+    last_success = datetime.datetime.fromisoformat(named["last_success_at"])
+    newest_call = datetime.datetime.fromisoformat(named["most_recent_call_date"])
+    assert _STATE_OF_SYNC[last_success] == (named["doorways"], named["latest_call_date"]), (
+        f"rows ({named['doorways']} doorways, newest call {named['latest_call_date']}) "
+        f"are not the rows of the sync the export names ({named['last_success_at']})")
+    assert newest_call.astimezone(HALIFAX).date().isoformat() == named["latest_call_date"], (
+        "the newest call the clocks name is not the newest call the rows state")
+
+
+_EXPORT_ROUTES = [
+    ("csv", "/api/types/blocking-driveway/export.csv", _state_named_by_csv),
+    ("brief", "/types/blocking-driveway/export", _state_named_by_brief),
+]
+
+
+@pytest.mark.parametrize("label,route,state_named_by", _EXPORT_ROUTES,
+                         ids=[r[0] for r in _EXPORT_ROUTES])
+def test_an_export_names_one_mirror_state_when_a_sync_lands_between_its_reads(
+        client, clean_db, monkeypatch, label, route, state_named_by):
+    _seed_first_sync_ending_in_a_late_evening_call(clean_db)
+    # The boundary the check below has to get right: the first state's newest
+    # call has a UTC date one day after its Halifax date.
+    assert LATE_EVENING_CALL.date() != LATE_EVENING_CALL.astimezone(HALIFAX).date()
+
+    real = app_server.derive_recency.derive_with_recency
+    landed = []
+
+    def rows_read_then_a_sync_lands(*args, **kwargs):
+        result = real(*args, **kwargs)          # the rows are read from the first sync's state
+        if not landed:
+            _seed_second_sync_state(clean_db)   # a second connection commits the second sync
+            landed.append(True)
+        return result                           # the clocks are read after it
+
+    monkeypatch.setattr(app_server.derive_recency, "derive_with_recency",
+                        rows_read_then_a_sync_lands)
+
+    raced = state_named_by(client.get(route).get_data(as_text=True))
+
+    assert landed, "the second sync was never committed between the two reads"
+    _assert_rows_and_clocks_are_one_mirror_state(raced)
+
+    # The sync did land: the next request reads it, whole.
+    after = state_named_by(client.get(route).get_data(as_text=True))
+    _assert_rows_and_clocks_are_one_mirror_state(after)
+    assert datetime.datetime.fromisoformat(after["last_success_at"]) == T2
+    assert after["doorways"] == 5
 
 
 # ------------------------- the export link on the served page (follow-up to 7.7)

@@ -585,11 +585,12 @@ canvas#cv{display:block;width:100%;height:100%}
 </div>
 <script>
 /* Task 5.1 (mirror-hrm-data-and-host-app): this page is evolved from
- * web/template.html, which src/hotspots.py's write_board() still fills by
- * substituting __MAP__/__DATA__ at generation time -- that path is untouched.
- * Here the same two values are fetched from this server's JSON API instead of
- * being embedded, which is the only structural change from the template:
- * everything below this boot() wrapper is template.html's script unmodified.
+ * web/template.html, which src/hotspots.py's write_board() filled by
+ * substituting __MAP__/__DATA__ at generation time (both retired under task
+ * 8.7; last present at b04731c). Here the same two values are fetched from
+ * this server's JSON API instead of being embedded, which is the only
+ * structural change from the template: everything below this boot() wrapper
+ * was template.html's script unmodified.
  *
  * Task 5.2: DEFAULT_SLUG is still the type `/` (no path suffix) serves, but
  * SLUG -- what every fetch() below actually uses -- is read back out of the
@@ -900,7 +901,7 @@ const FILTERS = doorPayload.filters || {};
   }
 })();
 
-/* Header figures the template used to have write_board() bake into the page
+/* Header figures the retired template had write_board() bake into the page
  * text at generation time (__LATEST__, __N_DOORWAYS__, ...). Same numbers, now
  * read from what the API just returned instead of from a filled placeholder. */
 (() => {

@@ -68,21 +68,27 @@ The window is mostly the office clock. It is not in the product.
 
 ## Run it
 
+The lists are served by the application (`python3 src/app/server.py`, see `README.md`) and leave it
+through its two export routes. From the command line, `python3 src/mirror/derive.py <dir> --violation
+Driveway` derives them from the mirror into a directory you name.
+
+`src/hotspots.py` is the original live-source pipeline, kept as the baseline the mirror's derivation
+is reconciled against. It takes its four output paths on the command line and has no default:
+
 ```bash
-python3 src/hotspots.py
+python3 src/hotspots.py --violation Driveway --csv <file> --brief <file> --block-csv <file> --block-brief <file>
 ```
 
-No keys and no install.
-`--violation` takes any alleged-violation substring.
+It needs no keys and no install. `--violation` takes any alleged-violation substring.
 `--district` limits the brief to one district.
 
-Outputs `out/watchlist.csv` and `out/watchlist.md`.
-
-`.github/workflows/nightly.yml` runs it on a schedule at 05:30 Atlantic and commits the result, so no person has to run it.
+It no longer writes `out/watchlist.csv` and `out/watchlist.md`. The `out/` directory was removed
+(last present at `b04731c`, readable with `git show b04731c:out/watchlist.csv`), and the nightly
+workflow that committed to it was removed under task 1.1.
 
 ## Why it clears the bar
 
-1. **Runs without a person.** A scheduled GitHub Actions job against a public API.
+1. **Runs without a person.** The mirror is loaded and kept current from a public API (`src/mirror/sync.py`) and the application reads it. The GitHub Actions job that once committed lists to `out/` on a schedule was removed under task 1.1.
 2. **Joins data nobody has joined.** The call is in one layer. The violation type, the tow outcome and the vehicle are in a second layer, a key and value table of 1.1 million rows. HRM publishes no join between them.
 3. **Sits inside someone's workday.** It is a work list for the team that installs signs, not a dashboard someone must remember to open.
 
@@ -91,12 +97,12 @@ Outputs `out/watchlist.csv` and `out/watchlist.md`.
 Real:
 
 - The join, the repeat detection, the tow comparison, the vehicle count, the recency filter, and both outputs. All run live against HRM open data.
-- The scheduled run. The workflow file is committed but has not yet run on a schedule in this repo.
-- Every number in this folder is produced by `src/hotspots.py`.
+- The mirror sync (`src/mirror/sync.py`) and the served application that reads it. The scheduled GitHub Actions run that committed lists to `out/` was removed under task 1.1.
+- Every number in this folder is produced by `src/mirror/figures.py` and `src/mirror/derive.py` against the mirror, except the dated one-off measurement under "What was tested and dropped".
 
 Stubbed:
 
-- No delivery. The brief is a file in the repo. It should be an email or a Teams post.
+- No delivery. The brief is a page and a CSV the application exports on request, not a file in the repo. It should be an email or a Teams post.
 - No effect measurement. The product cannot yet show that a bollard reduced the calls.
 - Vehicle data is missing on some calls. One listed address records a vehicle on 1 of its 11 calls, so its distinct count is meaningless. Read `vehicles_seen` before `vehicles_distinct`.
 - No recommendation per address. It says "enforcement will not fix this one". It does not say whether the fix is a sign, a bollard or paint. That needs a site visit or a street view read.

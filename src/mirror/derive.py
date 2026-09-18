@@ -2,8 +2,10 @@
 
 Tasks 4.1 (selection, joining, outcome and vehicle attachment, address reduction,
 doorway location) and 4.4 (census placement, closing D14a's retry asymmetry) of
-`mirror-hrm-data-and-host-app`. `src/hotspots.py` stays stdlib-only and untouched as
-the live-service baseline 4.9 reconciles against; this module reuses its pure
+`mirror-hrm-data-and-host-app`. `src/hotspots.py` stays stdlib-only, kept as
+the live-service baseline 4.9 reconciles against (its pure functions are unmodified
+by this change; only its board writer and default output paths were retired, under
+task 8.7); this module reuses its pure
 functions (`to_local`, `clean_address`, `street_of`, `in_block`, `find_block`,
 `vehicle_key`, `build`, `roll_blocks`) rather than reimplementing them, and calls
 `build()`/`roll_blocks()` unmodified on data shaped exactly like `hotspots.load()`

@@ -3,9 +3,10 @@
 
 `design.md` M6: "Decisions move to the store behind the application. All
 viewers read and write the same rows." Before this task the only
-implementation of shared triage was `window.claude.use("db")` in
-`web/template.html`, which resolves to `null` off a Claude Artifact host and
-silently degrades every viewer to a private `localStorage` copy
+implementation of shared triage was `window.claude.use("db")` in the
+since-retired `web/template.html` (last present at b04731c), which resolved to
+`null` off a Claude Artifact host and silently degraded every viewer to a
+private `localStorage` copy
 (`proposal.md`'s framing of the defect this task exists to end). This module
 is the replacement: a decision recorded through `record()` lands in the
 `triage_decisions` table `schema.sql` already defines (task 1.5), and every

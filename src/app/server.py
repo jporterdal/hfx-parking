@@ -1,21 +1,23 @@
 """Serve the doorway list, the block list and the map over HTTP (task 5.1).
 
 `design.md` M5: "the file stops being the product." D11's standalone board
-(`src/hotspots.py`'s `write_board`, filling `web/template.html`) required nothing
-of a viewer but a browser, and that property is the one worth keeping -- not the
-file. This module keeps it by putting the infrastructure on the server's side of
-the line: a viewer needs no install, no account, no credential and no build step,
-because `web/app/index.html` is a plain HTML/CSS/JS page (no bundler, no
-framework) that fetches its data from the JSON API below instead of having it
-embedded at generation time.
+(`src/hotspots.py`'s `write_board`, filling `web/template.html`; both retired
+under task 8.7, last present at commit b04731c) required nothing of a viewer but
+a browser, and that property is the one worth keeping -- not the file. This
+module keeps it by putting the infrastructure on the server's side of the line:
+a viewer needs no install, no account, no credential and no build step, because
+`web/app/index.html` is a plain HTML/CSS/JS page (no bundler, no framework) that
+fetches its data from the JSON API below instead of having it embedded at
+generation time.
 
-`src/hotspots.py` and `web/template.html` are untouched. They still produce the
-live-baseline board task 4.9 reconciles the mirror-backed derivation against, and
-nothing here imports or calls into that path. `web/app/index.html` is a *new*
-file evolved from `web/template.html` -- the same lists, map and triage UI, in
-the same plain JavaScript, with its `const MAP = __MAP__; const DATA = __DATA__;`
-replaced by two `fetch()` calls. See that file's header comment for the exact
-diff.
+`src/hotspots.py` survives only as the live-source baseline task 4.9 reconciles
+the mirror-backed derivation against (its four list outputs, each written to a
+caller-named path), and nothing here imports or calls into that path.
+`web/app/index.html` is a *new* file evolved from the retired
+`web/template.html` (`git show b04731c:web/template.html`) -- the same lists,
+map and triage UI, in the same plain JavaScript, with its
+`const MAP = __MAP__; const DATA = __DATA__;` replaced by two `fetch()` calls.
+See that file's header comment for the exact diff.
 
 design.md M12 (server shape, decided, not revisited here):
   - Flask, synchronous. The mirror is read through synchronous psycopg and a
@@ -411,15 +413,16 @@ def _filters_from_request():
 
 
 def _doorway_payload(rows):
-    """One doorway list, in the abbreviated-key shape `hotspots.write_board`'s
-    `page_rows` already uses (`a`, `d`, `c`, ... ), so `web/app/index.html`'s
-    script -- copied from `web/template.html`, which reads exactly this shape
-    off `__DATA__` -- needs no changes to consume it from JSON instead.
+    """One doorway list, in the abbreviated-key shape the retired
+    `hotspots.write_board`'s `page_rows` used (`a`, `d`, `c`, ... ), so
+    `web/app/index.html`'s script -- copied from the retired
+    `web/template.html`, which read exactly this shape off `__DATA__` -- needs
+    no changes to consume it from JSON instead (both last present at b04731c).
 
     One divergence from `write_board`, not a behavioural change from
     `derive`/`hotspots.build`: a doorway with no located calls has `lat`/`lon`
     of `None` (an empty `statistics.median` in `hotspots.build`), and
-    `write_board` rounds them unguarded. Guarded here instead, so such a row
+    `write_board` rounded them unguarded. Guarded here instead, so such a row
     reaches the page as "no location" rather than raising -- see
     `specs/hosted-triage-app/spec.md`'s "Doorway without a location" scenario.
     """
@@ -446,8 +449,8 @@ def _doorway_payload(rows):
 
 
 def _block_payload(blocks):
-    """One block list, in `hotspots.write_board`'s `page_blocks` shape -- see
-    `_doorway_payload`'s docstring."""
+    """One block list, in the retired `hotspots.write_board`'s `page_blocks`
+    shape -- see `_doorway_payload`'s docstring."""
     payload = []
     for i, b in enumerate(blocks):
         payload.append({
@@ -461,8 +464,8 @@ def _block_payload(blocks):
 
 
 def _summary(result):
-    """The header figures `write_board` bakes into the page text at generation
-    time (`__TOW_PCT__`, `__UNIQUE_PCT__`, `__DISTINCT__`, `__SEEN__`,
+    """The header figures the retired `write_board` baked into the page text at
+    generation time (`__TOW_PCT__`, `__UNIQUE_PCT__`, `__DISTINCT__`, `__SEEN__`,
     `__WITH_NEIGHBOUR__`) -- computed the same way, from the same `calls`/
     `fields`/`rows` a `derive()` call already returns, so the served page can
     fill them client-side instead of at generation time. `None` where the
@@ -899,6 +902,24 @@ def _tow_thesis_sentence(figures_result):
     return f"{conclusion[0].upper()}{conclusion[1:]}{pct_clause}.{caveat_clause}"
 
 
+def _pin_snapshot(conn):
+    """Make every read on `conn` from here to its close see one mirror state.
+
+    An export names a mirror state (the clocks) next to the rows it lists, and
+    reads them in separate queries. Under Postgres' default READ COMMITTED each
+    query sees whatever is committed when it runs, so a sync committing between
+    the rows read and the clocks read left an export whose clocks named a later
+    sync than its rows came from. One REPEATABLE READ transaction takes its
+    snapshot at the first query and keeps it, so rows, clocks and figures all come
+    from the same one. `READ ONLY` states that an export writes nothing.
+
+    Must be the first thing run on the connection after `mirror.db.connect()`
+    (whose own `SET search_path` does not take a snapshot); Postgres rejects the
+    change once any query has run.
+    """
+    conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+
+
 def _freshness_for_export(conn):
     """The same clocks `GET /api/freshness` serves (`freshness()` below),
     read the identical way -- `mirror.status.mirror_freshness` plus
@@ -1159,8 +1180,9 @@ def create_app(conn_factory=None):
     @app.get("/map-network.json")
     def map_network():
         # Task 5.4: the 490 KB street network never varies by canonical type or
-        # by filter -- every route in this module reads it from the one file
-        # `src/hotspots.py --network` last wrote, so there is nothing per-request
+        # by filter -- every route in this module reads it from the one
+        # committed file `web/map-network.json` (`src/hotspots.py --network`, an
+        # option since removed, last wrote it), so there is nothing per-request
         # to compute here, unlike /api/types/<slug>/... Two mechanisms make that
         # cacheable rather than merely static:
         #   - `max_age` sets `Cache-Control: public, max-age=86400`, so a browser
@@ -1399,6 +1421,7 @@ def create_app(conn_factory=None):
         filters = _filters_from_request()
         conn = connect()
         try:
+            _pin_snapshot(conn)
             result = derive_recency.derive_with_recency(
                 conn, canonical_type=canonical, **filters,
             )
@@ -1437,6 +1460,7 @@ def create_app(conn_factory=None):
         filters = _filters_from_request()
         conn = connect()
         try:
+            _pin_snapshot(conn)
             result = derive_recency.derive_with_recency(
                 conn, canonical_type=canonical, **filters,
             )

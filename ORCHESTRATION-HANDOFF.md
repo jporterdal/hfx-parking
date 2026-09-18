@@ -12,7 +12,7 @@ Verify before trusting anything below — an agent's report is a claim, not evid
 ```bash
 git status --short          # whose files changed
 git diff                    # what actually landed vs. what was claimed
-python -m pytest -q         # 527 tests as of the Pool 8 checkpoint, all passing
+python -m pytest -q         # 529 tests as of the Pool 9 checkpoint, all passing
 openspec validate mirror-hrm-data-and-host-app --strict
 ```
 
@@ -22,14 +22,14 @@ something nobody verified. This happened once already in this change (see "Histo
 
 ## State at last commit
 
-The **Pool 8 checkpoint** (`git log -1`; its parent is `c5c8271`, plus the doc-only `b04731c`).
-527 tests, all passing; `openspec validate --strict` clean, both run on the working tree just
-before committing.
+The **Pool 9 checkpoint** (`git log -1`; its parent is the doc-only `05a16ce`, after the Pool 8
+checkpoint `be723cf`). 529 tests, all passing; `openspec validate --strict` clean, both run on the
+working tree just before committing.
 
 Complete through: sections 1–4 entirely, 5.1–5.8, 6.1–6.7, 7.1–7.8 entirely, 8.1 (partial, see its
-note), 8.1a, 8.2, 8.3, 8.4, 8.6, 8.7, 8.8. **Not done:** 8.5 (decisions narrative — now unblocked),
-8.9 (stale-reference sweep, added this pool) and all of section 9. Several completed tasks carry
-caveats in their `tasks.md` lines (7.7, 7.8, 8.4, 8.7 especially); read them before treating a task
+note), 8.1a, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9. **Not done:** all of section 9 (9.1–9.8).
+**Section 8 is complete.** Several completed tasks carry
+caveats in their `tasks.md` lines (7.7, 7.8, 8.4, 8.5, 8.7, 8.9 especially); read them before treating a task
 as fully closed.
 
 **7.2b and 7.7 were ticked on the user's word** (another agent had verified them; the orchestrator
@@ -92,6 +92,13 @@ used where regions allowed (A: 7.7a+7.8+footnote links; B: 8.4+8.7); E and F eac
 The user directed the stale-reference sweep and the `reconcile_figures` cleanup to be handled as a
 later task (8.9) or one-off; the `--board` removal was done as a one-off here.
 
+**Pool 9** (8.5; 8.9 + the export race fix) — two workers, both Sonnet, ~271k tokens (G 108k, H 163k),
+no re-dispatch, no collisions. G owned `decisions.md` only; H owned the code, tests, `product.md` and
+the sweep files. The orchestrator corrected one line of G's text (a quiet night is now 6 requests, not
+3, per design) and independently re-ran the race test against a scratch copy with the fix removed: both
+parametrizations fail with the stale-mix assertion, and pass with it. Per the user's instruction the
+driveway footer and Ask-Claude prompt were NOT touched (concern 11, deferred to Section 9's dispatch).
+
 ## Open concerns, carried across pools
 
 1. **5.6 and 5.5a are ticked without a browser check.** Both ask for something a human watching a
@@ -119,18 +126,19 @@ later task (8.9) or one-off; the `--board` removal was done as a one-off here.
 9. **5.5c's `"rp"` (repeat_calls) payload field is provable but not shown** — added to make the
    recency-vs-recurrence distinction testable over HTTP; nothing in the UI displays it. Worth a look
    if that figure should be user-visible, not just internally correct.
-10. **Export race (7.8 caveat).** An export reads its rows and its freshness clocks in separate
-    queries, so a sync landing mid-request could name a different mirror state than its rows. Fix by
-    reading both in one transaction/snapshot. Bears on 9.5.
+10. ~~Export race (7.8 caveat)~~ **Fixed for the two export routes** in Pool 9: `_pin_snapshot` runs
+    `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY` first, and a constructed-interleaving
+    test proves it. **Same shape, not fixed:** `GET /api/freshness` reads `mirror_freshness` and
+    `source_edit_history` in separate queries, and `derive_with_recency` reads calls, fields and census
+    separately on `/doorways` and `/blocks`; the page's four HTTP fetches can never share a snapshot.
+    Bears on 9.5 (compare view and export from one mirror state, so run 9.5 with the mirror quiet).
 11. **Driveway-specific text on every type's page (bears on 9.8).** The "Why blocks" footer hard-codes
     driveway numbers on every type's page, and the Ask-Claude prompt says "blocked-driveway
     complaints" for every type. 9.8 (no type presents blocked driveway's conclusion without its own
     evidence) cannot pass until both are made type-specific or removed. **User decision: these two
     text fixes are deferred, and are to be made when Section 9 is being dispatched** (as a
     precondition to 9.8), not in the next pool. Also noted on 9.8's line in `tasks.md`.
-12. **Export race (concern 10) is in the next pool** on the orchestrator's reading of the user's
-    instruction, which was ambiguous ("the two text fixes and delay"). If the user meant to defer it
-    too, say so before the worker's changes are committed; it is a small, self-contained change.
+12. ~~Export race in Pool 9~~ done; the user's "what you did was correct" confirmed the reading.
 13. **Interpretation in 8.7's caveat:** "the only way a list leaves the application" is read as the
     served application. `src/mirror/derive.py` and `src/hotspots.py` (the 4.9/9.4 live baseline) still
     write lists to a caller-named directory, and the JSON routes feed the page.
@@ -139,44 +147,28 @@ later task (8.9) or one-off; the `--board` removal was done as a one-off here.
     The export follows the on-screen district anyway.
 15. **`test_export_csv_and_brief_agree_on_row_counts_with_the_view` is now redundant** with the 7.8
     tests; harmless, can be deleted in a later sweep.
+16. **Stale wording left in `docs/parking-hotspots/product.md`** (found by 8.9's worker, outside the
+    sweep's search terms): line ~46 "A scheduled job that reads HRM open data and writes a ranked list"
+    and line ~99 "All run live against HRM open data". Both are product wording; the user decides.
+17. **Spec/proposal drift found by 8.5's cross-check, unresolved:** `proposal.md` still describes the
+    retired watermark/open-set sync and "`out/` at most an export"; the spec, design M4 and 3.1 still
+    list a "watermark" among recorded sync outcomes; design leaves the grace period open while 7.2a set
+    it from `POLL_INTERVAL`; `ROLE_OPTIONS` in the page has a third role, "Other", that spec and design
+    do not name (and design M7 says the role is chosen "on entry", the spec "before recording").
 
 ## Where the work goes next
 
-**Ready now** (dependencies met), per `dispatch-plan.md`:
-- **8.5** (record the decisions in `docs/parking-hotspots/decisions.md`: mirror, source-paced sync,
-  served application, shared triage, role selection, removal of the scheduled job; verify the
-  narrative matches the specs). Its dependencies 8.1, 8.1a, 8.2, 8.3, 8.4, 8.6, 8.7, 8.8 are all
-  done. Docs only. Should also record the M12 decision and the `b04731c` pointer.
-- **8.9** (sweep stale references to the retired template, the deleted `out/` files and bare
-  `python3 src/hotspots.py`; the known sites are listed in its `tasks.md` line). Comments, docstrings
-  and docs across several files, including `server.py`, `index.html` and `test_app.py` — one worker
-  owns all of those, so it cannot run beside a worker that edits them.
-- **Concern 10** (export race). Not a numbered task; lives in `server.py`/`test_app.py`.
-- **Concern 11** (driveway-specific footer and Ask-Claude prompt) is **deferred to Section 9's
-  dispatch** by the user's decision, as a precondition to 9.8.
-- **Section 9** (verification) is now reachable: 9.1–9.8 have their dependencies met. 9.8 waits for
-  concern 11; 9.5 is best run after concern 10.
-
-**Next pool, as planned with the user (dispatch after the user has run `/compact`)** — two Sonnet
-workers, in parallel, no commits, no `tasks.md` edits:
-- **Worker G: 8.5 alone.** Owns `docs/parking-hotspots/decisions.md` only. Records the decisions this
-  change makes (mirror, source-paced sync, served application, shared triage, role selection, removal
-  of the scheduled job) with reasons, plus the M12 outcome and the `b04731c` pointer, and verifies the
-  narrative against the specs and `design.md`. Must not touch `product.md` (8.9's) or code. Note 8.1
-  left `decisions.md`'s original figures as a historical record: do not "correct" them.
-- **Worker H: 8.9 + the export race fix (concern 10).** Owns every file listed on 8.9's `tasks.md`
-  line (`server.py`, `index.html`, `test_app.py`, `reconcile_figures.py`, `derive.py`, `triage.py`,
-  `history.py`, `schema.sql`, `tests/test_history.py`, `docs/parking-hotspots/product.md`) but NOT
-  `decisions.md`. For the race: read an export's rows and freshness clocks in one transaction or
-  snapshot, and prove it with a constructed case (a sync landing between the two reads), not by
-  reasoning. Do not touch the driveway footer or Ask-Claude prompt (deferred).
-Two tasks per worker where the regions allow it: H has two; G has one because nothing else in the
-ready set is docs-only.
-
-**Region split:** 8.5 touches only `docs/parking-hotspots/decisions.md`; 8.9 and concerns 10/11 all
-touch `server.py`/`index.html`/`test_app.py`, so they go to one worker (or run in sequence), while
-8.5 can run beside it. Workers running concurrently run only their own test files; the orchestrator
-runs the full suite once at the end.
+Sections 1–8 are complete. What remains is **Section 9 (verification), 9.1–9.8**, whose dependencies
+are all met. Before dispatching it:
+- **Concern 11 first (user decision):** make the "Why blocks" footer and the Ask-Claude prompt
+  type-specific or remove the driveway-specific text; that is a precondition to 9.8 and is to be done
+  when Section 9 is being dispatched. It touches `web/app/index.html` (and possibly `server.py`).
+- **9.5** (board and exports agree on every count) is best run with the mirror quiet, given concern 10's
+  residual.
+- 9.4 uses the live baseline (`src/hotspots.py`), which needs network access to HRM.
+- Section 9 tasks are verification, so most are read-only or test-writing; check file ownership as
+  usual before pairing any two in a pool.
+- Open human check: no browser has ever exercised any page change (concern 1).
 
 **Dispatch convention for this session (user instruction):** two tasks per sub-agent within a pool
 wherever the regions allow it, and otherwise separate sub-agents running asynchronously.
@@ -184,7 +176,7 @@ wherever the regions allow it, and otherwise separate sub-agents running asynchr
 ## Cost so far
 
 Figures below cover pools 1–5 only; pools 6 and 7 were not recorded; Pool 8 is in its History entry.
-Worker agents across five completed pools: ~1.94M tokens (17 agents). Pool 5 (4 agents, clean on
+Worker agents across five completed pools: ~1.94M tokens (17 agents); Pool 8 (~567k) and Pool 9 (~271k) are in their History entries. Pool 5 (4 agents, clean on
 first attempt) ran ~493k tokens total, in line with Pool 4's per-agent average once you account for
 Pool 4's re-dispatch. Region-bundling (multiple tasks per agent, one region) continues to look cheaper
 than one-agent-per-task, per Pool 3's original finding.

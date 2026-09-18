@@ -45,10 +45,10 @@ documented, not silently dropped:
 Anything else that differs -- a cell, a missing or reordered row, a brief line that
 was never a freshness artefact -- is reported as a discrepancy.
 
-`out/triage-board.html` is out of scope here and stays that way until section 5:
-`mirror.derive` has no board-writing path, so there is nothing on the mirror side to
-diff the live run's board against. `board_status()` states this in every report
-rather than the comparison silently only ever mentioning four files.
+`out/triage-board.html`, the standalone board, was retired under task 8.7 (last
+present at b04731c): `src/hotspots.py` no longer writes a board and `mirror.derive`
+never did, so there is no board on either side to diff. `BOARD_STATUS` states this in
+every report rather than the comparison silently only ever mentioning four files.
 
 Run:  python3 src/mirror/reconcile_figures.py                       # Driveway
       python3 src/mirror/reconcile_figures.py --violation Driveway --out-dir /tmp/x --keep
@@ -87,12 +87,11 @@ _FRESHNESS_NOTE_RE = re.compile(
 )
 
 BOARD_STATUS = (
-    "out/triage-board.html: not compared. mirror.derive writes only watchlist/blocks "
-    "CSVs and briefs -- it has no board-writing path yet (that is section 5, serving "
-    "the application). src/hotspots.py's live run still writes a board into its "
-    "scratch directory as a side effect of running main(), but there is nothing "
-    "produced on the mirror side to diff it against, so it is left out of every "
-    "comparison below rather than silently skipped."
+    "out/triage-board.html: not compared. The standalone board was retired under "
+    "task 8.7 (last present at b04731c): src/hotspots.py no longer writes one and "
+    "mirror.derive never did, so neither side of this run produces a board. The "
+    "comparison covers only the four list files (watchlist/blocks CSVs and briefs); "
+    "the served application's own pages are outside it."
 )
 
 # The four files 4.9 names, and the business key each is compared by -- never
