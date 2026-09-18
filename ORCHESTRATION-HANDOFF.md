@@ -12,7 +12,7 @@ Verify before trusting anything below — an agent's report is a claim, not evid
 ```bash
 git status --short          # whose files changed
 git diff                    # what actually landed vs. what was claimed
-python -m pytest -q         # 445 passing as of ab0c1fa
+python -m pytest -q         # 481 passing as of 9fe0d7d
 openspec validate mirror-hrm-data-and-host-app --strict
 ```
 
@@ -22,11 +22,17 @@ something nobody verified. This happened once already in this change (see "Histo
 
 ## State at last commit
 
-`ab0c1fa` — the last verified-good checkpoint. 445 tests passing, `openspec validate` clean.
+`9fe0d7d` — the last checkpoint. 481 tests passing, `openspec validate --strict` clean (both run
+against the working tree just before it was committed).
 
-Complete through: sections 1–4 entirely, 5.1, 5.2, 5.3, 5.4, 5.5, 5.5a–5.5c, 5.6, 5.7, 5.8, 6.1–6.7
-entirely, 7.1–7.5 entirely (7.2, 7.4, 7.5 landed this pool), 7.6, 8.1 (partial, see its note), 8.1a,
-8.2, 8.3, 8.6, 8.8. 5.5e also landed this pool.
+Complete through: sections 1–4 entirely, 5.1–5.8 entirely (incl. 5.5a–5.5e), 6.1–6.7 entirely,
+7.1–7.7 entirely (7.2a and 5.5d landed in `d1b8b5f`; 7.2b and 7.7 landed in `9fe0d7d`), 8.1 (partial,
+see its note), 8.1a, 8.2, 8.3, 8.6, 8.8.
+
+**7.2b and 7.7 were ticked on the user's word**, not re-verified by the orchestrator: they were
+written by a pool whose orchestrator session ended before it verified, ticked or committed, leaving
+the work uncommitted in the tree. The user confirmed another agent had verified both. The
+orchestrator only confirmed pytest and `openspec validate` were green before committing.
 
 ## Conventions these pools run under
 
@@ -69,6 +75,12 @@ offset.
 Four-way region split: toolbar+results (5.5c/5.5e/7.4), header freshness banner (7.2), header-intro+
 footer-narrative (7.5), `README.md` alone (8.2). Committed at `ab0c1fa`.
 
+**Pool 6** (5.5d, 7.2a) committed at `d1b8b5f`. **Pool 7** (7.2b, 7.7) finished writing at about
+01:09 the same night but its orchestrator session ended before verifying, ticking or committing; the
+next session found it as an uncommitted +1,073/−15 diff across `server.py`, `test_app.py` and
+`index.html` and this handoff still describing `ab0c1fa`. Lesson: **update this file at every
+checkpoint, in the same commit or the one straight after**, not later.
+
 ## Open concerns, carried across pools
 
 1. **5.6 and 5.5a are ticked without a browser check.** Both ask for something a human watching a
@@ -86,8 +98,12 @@ footer-narrative (7.5), `README.md` alone (8.2). Committed at `ab0c1fa`.
    one task, not fixed.
 5. **5.2's design choices were the agent's own** — path routing (`/types/<slug>`) plus a full-page
    `<select>`. Defensible, unspecified, and 7.7 will build exports around it.
-6. **M12 leaves a decision open**: whether `web/template.html` is folded back into the served page or
-   stays a separate file. It governs 8.7.
+6. **M12 leaves a decision open, and it now blocks 8.7**: whether `web/template.html` is folded back
+   into the served page or stays a separate file (`design.md` M12 says the change "does not make" it
+   and that it "needs one"). It decides whether 8.7 deletes the template and `write_board()` or keeps
+   `hotspots.py`'s standalone board as an artefact. `src/app/server.py` imports functions from
+   `hotspots.py`, so the module itself stays either way; only its `main()` and the `out/` outputs are
+   in question. **Do not dispatch 8.7 until the user has made this call.**
 7. **7.5's dwelling-rate/block-label footnotes only reach the header stats**, not the actual figures
    in the results list/detail panel (`evidenceBlock()`) — that region belonged to a different agent
    this pool. A follow-up should add the same `#lim-dwelling`/`#lim-block-label` links there.
@@ -100,21 +116,34 @@ footer-narrative (7.5), `README.md` alone (8.2). Committed at `ab0c1fa`.
 
 ## Where the work goes next
 
-Per `dispatch-plan.md`'s DAG, now ready (dependencies satisfied by this checkpoint):
-- **7.2a** (next-update as overdue state machine) — waits on 7.2, done. Same region as 7.2 (header
-  freshness banner).
-- **5.5d** (state filter values in effect on view/export) — waits on 5.5c, done. Same region as
-  5.5c/5.5e/7.4 (toolbar/results).
+The 7.7 bottleneck has cleared. Per `dispatch-plan.md`'s DAG, now ready:
+- **7.7a** (name the canonical type each export and view covers) and **7.8** (a view and an export
+  from one mirror state agree on every count). Both work in the export routes and their tests:
+  `src/app/server.py`, `tests/test_app.py`, and `web/app/index.html` if the view side needs it. 7.7
+  already carries the type name and a row-count agreement test, so the agent should check what is
+  already covered before adding anything.
+- **8.4** (replace the README "Open the board" instructions with the URL and export path, including
+  `docs/index.md`'s file table). Docs only: `README.md`, `docs/index.md`.
+- **8.7** (stop generating committed output to `out/`) — **held**, see concern 6. When it is
+  released it touches `src/hotspots.py`, the tracked `out/` files and possibly `web/template.html`,
+  and it must not edit `README.md` or `docs/index.md` (8.4's), only report what it makes stale.
+  Verification for it belongs in a new test file, not `tests/test_app.py`.
 
-Only two tasks ready right now, both small, in two different regions — worth a two-agent pool, or
-bundling both into whichever future pool reaches the next bottleneck. **7.2b** opens once 7.2a lands.
-The next real bottleneck is still **7.7** (export doorway and block lists plus a brief) — waits on 5.2
-(done), 5.5d, 7.1 (done) — and unblocks 7.7a, 7.8, 8.4 and critically **8.7** (`out/` generation must
-not be turned off before its replacement exists). Section 9 is verification and comes last.
+**8.5** (decisions.md narrative) waits on 8.4 and 8.7. Section 9 is verification and comes last.
+
+**Region split for the ready tasks** (checked for file overlap): 7.7a+7.8 own `server.py`,
+`test_app.py` and `index.html`; 8.4 owns `README.md` and `docs/index.md`; 8.7 (when released) owns
+`hotspots.py`, `out/` and any new test file. None share a file. Workers running concurrently should
+run only their own test files, since the full suite can fail transiently on another agent's
+half-finished edit; the orchestrator runs the full suite once at the end.
+
+**Dispatch convention for this session (user instruction):** two tasks per sub-agent within a pool
+wherever the regions allow it, and otherwise separate sub-agents running asynchronously.
 
 ## Cost so far
 
-Worker agents across five completed pools: ~1.94M tokens (17 agents). Pool 5 (4 agents, clean on
+Figures below cover pools 1–5 only; pools 6 and 7 were not recorded. Worker agents across five
+completed pools: ~1.94M tokens (17 agents). Pool 5 (4 agents, clean on
 first attempt) ran ~493k tokens total, in line with Pool 4's per-agent average once you account for
 Pool 4's re-dispatch. Region-bundling (multiple tasks per agent, one region) continues to look cheaper
 than one-agent-per-task, per Pool 3's original finding.
