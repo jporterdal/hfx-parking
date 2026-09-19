@@ -43,7 +43,7 @@ An officer can only remove today's car.
 
 ## The product
 
-A scheduled job that reads HRM open data and writes a ranked list of the doorways where enforcement has already been tried and has not worked.
+A served application that reads a local mirror of HRM open data, kept current by a scheduled sync, and shows a ranked list of the doorways where enforcement has already been tried and has not worked.
 
 Each row carries the calls still arriving, the calls all time, the tows, and how many distinct vehicles were involved.
 
@@ -96,7 +96,7 @@ workflow that committed to it was removed under task 1.1.
 
 Real:
 
-- The join, the repeat detection, the tow comparison, the vehicle count, the recency filter, and both outputs. All run live against HRM open data.
+- The join, the repeat detection, the tow comparison, the vehicle count, the recency filter, and both outputs. All run against the local mirror of HRM open data (`src/mirror/derive.py`); `src/hotspots.py` still runs the same analysis live against HRM as the reference the mirror's derivation is reconciled against.
 - The mirror sync (`src/mirror/sync.py`) and the served application that reads it. The scheduled GitHub Actions run that committed lists to `out/` was removed under task 1.1.
 - Every number in this folder is produced by `src/mirror/figures.py` and `src/mirror/derive.py` against the mirror, except the dated one-off measurement under "What was tested and dropped".
 
