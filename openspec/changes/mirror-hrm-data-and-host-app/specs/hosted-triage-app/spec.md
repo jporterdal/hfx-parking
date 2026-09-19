@@ -108,14 +108,14 @@ Each decision SHALL carry the time it was last changed and the role of the viewe
 
 ### Requirement: Identify a viewer by role, not by account
 
-A viewer SHALL select a role — coordinator or parking enforcement officer — and that role SHALL be attributed to the decisions they record.
+A viewer SHALL select a role — coordinator, parking enforcement officer, or other for a viewer who is neither — before recording a decision, and that role SHALL be attributed to the decisions they record.
 
 The application SHALL state that role selection identifies rather than authenticates, and SHALL NOT present it as access control. Anyone who can reach the URL can record a decision; a viewer who believes otherwise is misled about who can change their work list.
 
-#### Scenario: Role is selected on entry
+#### Scenario: Role is selected before the first decision
 
-- **WHEN** a viewer opens the application without having selected a role
-- **THEN** they are asked to choose one before recording a decision
+- **WHEN** a viewer records a decision without having selected a role
+- **THEN** they are asked to choose one first, and the decision is recorded with that role
 
 #### Scenario: Role is not a credential
 

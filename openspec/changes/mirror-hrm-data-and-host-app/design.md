@@ -140,7 +140,7 @@ Today's failure mode is honest. A run either completes against live data or fail
 
 That is precisely the sibling change's D16 — "a job that has been failing for a week produces a board indistinguishable from a fresh one" — promoted from an output-formatting gap into a production defect. So:
 
-- Every sync attempt records its start, its outcome, the watermark it reached, the row counts it moved and the source `lastEditDate` it observed. A failure is a row, not an absence.
+- Every sync attempt records its start, its outcome, the highest `ObjectId` it loaded (evidence for M2a, not a sync input), the row counts it moved and the source `lastEditDate` it observed. A failure is a row, not an absence.
 - Every view states four clocks: when HRM last updated the source, the most recent call the data holds, when the mirror last synced successfully, and when the next sync is due.
 - A scheduled sync that has not happened flips the portal to an overdue state, visibly, on the page.
 
@@ -180,7 +180,7 @@ D13's *disclosure* requirement is not retired; it is the part worth keeping. Its
 
 ### M7. Role selection, not authentication
 
-The audience is HRM coordinators and parking enforcement officers at a demo, interacting in role. A viewer picks a role on entry and their triage decisions carry it.
+The audience is HRM coordinators and parking enforcement officers at a demo, interacting in role. A viewer picks a role — coordinator, parking enforcement officer, or other for anyone who is neither — before recording their first decision, and their triage decisions carry it.
 
 Accounts would be the wrong instrument. They would cost credential handling and a user store to produce, at a demo, a login screen between the audience and the product — and they would imply an access-control guarantee that a public demo URL does not have.
 
@@ -302,5 +302,7 @@ Still open:
 
 - **The source's true update cadence.** Unknown, and now known to be unknown: the "weekly-refreshed" claim was unsourced. `lastEditDate` polling measures it, so this answers itself after a few cycles. Until then the portal states it does not yet know the next source update rather than guessing one.
 - **How far back the retained list history should go.** Resolved in principle: this repository runs no scheduled job, so nothing commits generated output and the longitudinal record moves into the store (M5). What remains open is retention depth — every sync indefinitely is a few thousand rows a week and probably fine, but nobody has said how long the record needs to be useful.
-- **Grace period before a missed sync reads as overdue.** Depends on the observed cadence, so it follows from the question above rather than being set independently.
+- **Grace period before a missed sync reads as overdue.** Resolved in 7.2a: one polling interval (`NEXT_UPDATE_GRACE_PERIOD = sync.POLL_INTERVAL`, one day), so a sync reads as overdue once it is a full poll interval past its due time. It is grounded in this sync's own schedule rather than in HRM's cadence, because an overdue sync is a failure at this mirror's end (M4).
 - **Whether a viewer can change filters that alter what a published figure means.** M11 requires a view and an export to state the filter values that produced them. Whether the demo also pins a canonical default that headline figures are always quoted from is a product question, not a technical one.
+- **Deferred by the user (2026-09-18), to resolve later:** roles are not enforced by the server. It accepts any role string as given and stores a missing one as `unspecified`; "coordinator, parking enforcement officer or other" and "asked to choose a role" are enforced only in the page, which also does not say that anyone with the URL can record a decision (M7 requires it to), and decisions load once at page boot with no polling. Acceptable for the project's present test state; not for anything beyond it.
+- **Deferred by the user (2026-09-18), to be re-evaluated after they inspect the pages:** several served figures reach neither export — the header "ended in a tow" and "of vehicles unique" percentages and the vehicle and neighbour sentences — and the provenance figures (`call_denominators`, `response_time`, `tow.effect_bound`, `population`) are shown by neither the page nor the exports, only by `/figures`; the header tow percentage also uses all calls as its denominator (454 of 9,834) where the comparison cohort is 445 of 9,698, and the page does not name the denominator. Whether that is deliberate is a spec question.

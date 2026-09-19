@@ -137,7 +137,7 @@ The sync SHALL run with no credentials and no human involvement, and SHALL recor
 
 ### Requirement: Record the outcome of every sync attempt
 
-The system SHALL record, for each sync attempt: when it started, whether it succeeded, the watermark it reached, the number of rows inserted and updated per layer, the source's last-edit timestamp as observed, and, on failure, the error.
+The system SHALL record, for each sync attempt: when it started, whether it succeeded, the highest `ObjectId` it loaded (kept as evidence for design M2a, not used as an input to any later sync), the number of rows inserted and updated per layer, the source's last-edit timestamp as observed, and, on failure, the error.
 
 A failed sync SHALL be recorded as a row, not as an absence of one. The system SHALL distinguish the last sync *attempt* from the last *successful* sync, because a sync failing repeatedly has a recent attempt and is exactly as stale as one that stopped entirely.
 

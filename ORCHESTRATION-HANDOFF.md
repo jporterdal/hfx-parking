@@ -16,20 +16,21 @@ the orchestrator re-ran the scratch-revert proofs for E and D itself (both fail 
   its caveat line now says so).
 - **9.4 is TICKED** (2026-09-18, at the user's direction): the Driveway `type_figures` row was backed up
   (scratchpad), deleted and recomputed, `/figures` now says 95%, and only the two rounded sentences differ from
-  the old row. **Open follow-up: the `In Bus Stop` row (43/47) has the same stale rounding ("92%", should be
-  "91%"); not recomputed, awaiting the user's word.** `compute_and_store` skips a type that already has a row,
-  so the recompute is delete-then-compute for that one type.
+  the old row. The `In Bus Stop` row (43/47, "92%" -> "91%") had the same stale rounding and was recomputed the
+  same way (backed up, deleted, recomputed; two sentences differ); a scan of all 30 stored rows now finds no
+  vehicle sentence that differs from the fixed code. `compute_and_store` skips a type that already has a row,
+  so a recompute is delete-then-compute for that one type. Both recomputes wrote one `sync_runs` row each.
 - **Docs (done):** `README.md:94` and `product.md:36` say 95 per cent; `decisions.md:28` (historical) and
   `five-problems-research.md:172` (dated, different data, its 96 is correct) left alone. Concern 16 done:
   `product.md` lines ~46 and ~99 now describe the served application over the mirror.
 - **Concern 1 (browser check):** the user will do it once every other task is settled.
-- **Concern 17 (spec/proposal drift): drafted, AWAITING THE USER'S CONFIRMATION** (the `openspec-update-change`
-  skill requires confirming each artifact edit). Nothing in the change directory has been edited for it yet.
-  Only "Other" as a third role is a genuine product decision; the rest is wording.
-- **Concerns 20 and 21: deferred by the user** ("resolve later"; 21 to be re-evaluated after the user's physical
-  inspection of the pages). To be written into `design.md`'s "Still open" list, with the 17 edits, so they
-  survive this file's deletion.
-- After the 17 edits are confirmed and applied the change is ready for the user to archive (after their browser check). Delete this file, `dispatch-plan.md` and
+- **Concern 17 (spec/proposal drift): DONE** (user confirmed the draft): proposal (sync bullets, `out/` and
+  template bullet, role wording), `hrm-data-mirror` spec, `hosted-triage-app` spec (three roles incl. "Other",
+  role asked before the first decision), design (M7, sync-record bullet, grace period resolved as one poll
+  interval), task 3.1. The user chose to add "Other" to the spec rather than remove it from the page.
+- **Concerns 20 and 21: deferred by the user; now recorded in `design.md`'s "Still open" list** (they survive
+  this file's deletion).
+- The change is now ready for the user to archive, after their own browser check (concern 1). Delete this file, `dispatch-plan.md` and
   `orchestration-progress/` (its `worker-J-artifacts/served-vs-live-report.txt` is the evidence for 9.4) then.
 
 **Interruption protocol (still in force):** the user watches a 5-hour limit and asked that at about 95% no

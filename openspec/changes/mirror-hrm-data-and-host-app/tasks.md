@@ -65,7 +65,7 @@ New, replacing the retired mechanism:
 
 ## 3. Make staleness impossible to miss, and prove the mirror faithful at row level
 
-- [x] 3.1 Record every sync attempt with its start, outcome, watermark reached, per-layer rows inserted and updated, observed source last-edit timestamp, and error on failure, and verify a failed sync appears as a row rather than as an absence
+- [x] 3.1 Record every sync attempt with its start, outcome, highest `ObjectId` loaded (evidence for design M2a, not a sync input), per-layer rows inserted and updated, observed source last-edit timestamp, and error on failure, and verify a failed sync appears as a row rather than as an absence
 - [x] 3.2 Expose last attempt and last success separately, and verify a sync failing repeatedly reports a recent attempt and an unchanged last-success time
 - [x] 3.3 Expose four clocks separately — source last-edit, most recent call date, last successful sync, next sync due — and verify each is distinguishable from the others, including the case where syncs succeed while the source stops advancing
 - [x] 3.4 Report whether the mirror is behind the source, and verify the case where HRM has published more recently than the last successful sync is distinguished from the case where HRM simply has not published
