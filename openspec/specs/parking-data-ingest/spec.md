@@ -8,11 +8,13 @@ Joins the three Halifax Regional Municipality open datasets that hold a parking 
 
 ### Requirement: Select calls by alleged violation
 
-The violation type lives in the custom-fields table, not on the call record, so selection starts there: the system SHALL find the request identifiers whose alleged violation matches a caller-supplied label, then retrieve those requests.
+The violation type lives in the custom-fields data, not on the call record, so selection starts there: the system SHALL find the request identifiers whose alleged violation matches a caller-supplied label, then retrieve those requests **from the mirror**.
 
 Matching SHALL be by substring, case-insensitively, because HRM records one problem under more than one label. A blocked driveway is filed as both `Blocking Driveway (DISPATCH)` and `DRIVEWAY`; a rule that only strips the `(DISPATCH)` suffix would leave the two as separate types and undercount the problem.
 
 The system SHALL report which labels the match resolved to, so an operator can see what was actually included.
+
+Because selection now runs against held data rather than the network, its cost no longer scales with the number of violation types being processed. Selecting every tracked type SHALL NOT require a pass over the source per type.
 
 #### Scenario: Multiple labels for one problem
 
@@ -27,7 +29,12 @@ The system SHALL report which labels the match resolved to, so an operator can s
 #### Scenario: Violation is caller-supplied
 
 - **WHEN** a different violation substring is supplied
-- **THEN** the same pipeline runs unchanged against that violation
+- **THEN** the same derivation runs unchanged against that violation
+
+#### Scenario: Selection issues no source query
+
+- **WHEN** calls are selected for any violation type
+- **THEN** no request is made to the HRM service
 
 ### Requirement: Resolve a violation label to its canonical type
 
@@ -44,36 +51,6 @@ The `Other` catch-all and any label that does not describe where a vehicle is st
 
 - **WHEN** the canonical violation type list is built
 - **THEN** the `Other` catch-all and labels that do not describe vehicle placement are not included as tracked types
-
-### Requirement: Page through every source layer to exhaustion
-
-The source layers cap rows per response. The system MUST page until a response returns fewer rows than the page size, and MUST NOT assume one response holds the full result.
-
-Page sizes differ by layer: the request and custom-field tables return up to 1,000 rows, while the census layer returns fewer when geometry is requested. The system SHALL page each layer at a size that layer accepts.
-
-#### Scenario: Multi-page result retrieved whole
-
-- **WHEN** a selection matches more rows than one response can carry
-- **THEN** every row is retrieved
-
-#### Scenario: Census geometry paged at its own limit
-
-- **WHEN** census polygons are retrieved with geometry
-- **THEN** paging uses a size that layer accepts rather than the size used for the tabular layers
-
-### Requirement: Survive transient source failures
-
-The sources are public HTTP services with no availability guarantee. The system SHALL retry a failed request a bounded number of times before giving up, and SHALL fail with the source error rather than silently returning partial data.
-
-#### Scenario: Transient failure retried
-
-- **WHEN** a request fails once and succeeds on retry
-- **THEN** retrieval continues and the result is complete
-
-#### Scenario: Persistent failure surfaces
-
-- **WHEN** a request fails every attempt
-- **THEN** the run stops and reports the source error, rather than producing outputs from partial data
 
 ### Requirement: Attach outcome and vehicle fields to each call
 
@@ -130,16 +107,16 @@ A doorway whose calls carry no coordinates SHALL have no location, and MUST NOT 
 
 ### Requirement: Place each doorway in a census neighbourhood
 
-The system SHALL assign each located doorway to the census dissemination area containing it, determined by point-in-polygon containment against the census layer's own polygons.
+Each located doorway SHALL be assigned to the census dissemination area containing it, reading the polygons from the mirror.
 
-Containment MUST account for polygons with interior holes, so a doorway inside a hole is not counted as inside the polygon. The system SHALL carry the neighbourhood's identifier and its dwelling count forward, because the dwelling count is the denominator that keeps a dense neighbourhood from outranking a worse one.
+Containment SHALL be determined correctly for polygons with interior holes, and the result SHALL agree with the authoritative spatial answer for the same point. Whether that is computed by a spatial index in the store or by the existing bounding-box prefilter and even-odd ray cast is an implementation choice; the agreement is the requirement.
 
-The system SHALL report how many doorways fell in no neighbourhood.
+The system SHALL report how many doorways fell in no census block.
 
 #### Scenario: Doorway assigned to its neighbourhood
 
 - **WHEN** a located doorway falls inside a census polygon
-- **THEN** it carries that polygon's identifier and dwelling count
+- **THEN** it carries that polygon's identifier and dwelling count, matching the authoritative spatial answer for that point
 
 #### Scenario: Interior hole excluded
 
@@ -148,7 +125,7 @@ The system SHALL report how many doorways fell in no neighbourhood.
 
 #### Scenario: Unplaced doorways reported
 
-- **WHEN** a run completes
+- **WHEN** a derivation completes
 - **THEN** the number of doorways that fell in no neighbourhood is reported
 
 ### Requirement: Convert timestamps to Atlantic local time with daylight saving
@@ -185,9 +162,11 @@ The system SHALL expose the initiating channel alongside every call, and any pub
 
 ### Requirement: Stamp every run with its provenance
 
-Outputs are regenerated on a schedule and committed automatically, so a reader cannot tell a fresh result from a stale one without a stamp. The system SHALL record, and make available to every output it writes, the time the run executed and the date of the most recent call in the data.
+Every output SHALL carry: when the derivation ran, when the mirror last synced successfully, and the most recent call date the mirror holds.
 
-Where a window is measured relative to the data rather than to the wall clock, the system SHALL state the date that window is anchored to, so a stalled pipeline is visible rather than silently sliding the window backwards.
+Three clocks rather than one, and they answer different questions. The derivation time says when these figures were computed. The sync time says whether data is still arriving. The most recent call date says whether the source itself is still moving. A mirrored architecture can fail in ways that leave any one of the three looking healthy while another has stopped, and a reader cannot tell a stalled pipeline from a stalled source without seeing them separately.
+
+Where the mirror reports itself stale, every output SHALL say so.
 
 #### Scenario: Run timestamp available to outputs
 
@@ -201,5 +180,36 @@ Where a window is measured relative to the data rather than to the wall clock, t
 
 #### Scenario: Stalled pipeline is visible
 
-- **WHEN** the source stops updating and a run produces the same most-recent-call date as the previous run
+- **WHEN** the source stops updating and a derivation produces the same most-recent-call date as the previous one
 - **THEN** a reader can tell from the outputs that the data has not advanced
+
+#### Scenario: Three clocks travel together
+
+- **WHEN** any output is produced
+- **THEN** it carries the derivation time, the last successful sync time and the most recent call date
+
+#### Scenario: Stale mirror is disclosed in output
+
+- **WHEN** the derivation runs against a mirror reporting itself stale
+- **THEN** every output it produces states that the data may be out of date
+
+#### Scenario: An old output is identifiable as old
+
+- **WHEN** a reader opens an output produced some time ago
+- **THEN** they can tell how old it is without consulting version history
+
+### Requirement: Derive every tracked violation type from one pass over the mirror
+
+The system SHALL produce the doorway list, block list and effectiveness evidence for every tracked canonical violation type from the data already held, without a network pass per type.
+
+Types SHALL remain independent: no doorway, block or figure from one type may appear in another type's output. Cheap computation widens coverage; it does not merge the types, and it does not license a type to inherit a conclusion measured on a different one.
+
+#### Scenario: All types derived together
+
+- **WHEN** the derivation runs for every tracked canonical type
+- **THEN** each type produces its own doorway list, block list and effectiveness evidence, and no source query is issued
+
+#### Scenario: Types stay separate
+
+- **WHEN** outputs for two tracked types are compared
+- **THEN** no doorway or block appears in both as though it were the same finding
