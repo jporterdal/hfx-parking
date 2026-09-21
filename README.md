@@ -18,8 +18,8 @@ its slug).
 The served application persists triage decisions in the mirror's own database, so anyone who
 visits its URL sees the same triage state, and a team works one shared list instead of three.
 
-To run it yourself you need the mirror's Postgres database, whose address is read from
-`HFX_MIRROR_DSN`, and a `PORT` (default 8000):
+To run it yourself you need the mirror's Postgres database, configured as described under
+[Database configuration](#database-configuration), and a `PORT` (default 8000):
 
 ```bash
 python3 src/app/server.py                                    # development server
@@ -51,6 +51,37 @@ The mirror and the server do have dependencies, listed in `requirements.txt` (th
 previously had no manifest at all): a Postgres database and a Python dependency set (Flask
 behind a WSGI server such as gunicorn). `src/hotspots.py` stays stdlib-only, and a viewer still
 installs nothing.
+
+## Database configuration
+
+The database is configured with the standard Postgres environment variables, which `psql` and
+`pg_isready` read too. The sync, the load, the derivation, the served application and the
+tests all connect from these and from nothing else; no connection string, host, user or
+password is held in the repository.
+
+| Variable | |
+| --- | --- |
+| `PGHOST` | required: the server's host, or a unix socket directory |
+| `PGUSER` | required: the role to connect as |
+| `PGDATABASE` | required: the database to connect to |
+| `PGPORT` | optional: defaults to 5432 |
+| `PGPASSWORD` | optional: leave it out for passwordless authentication or a `~/.pgpass` entry |
+
+Copy `.env.example` to `.env` at the repository root and fill it in. `.env` is git-ignored and
+is read from the repository root whatever directory you run from. A variable already set in
+your shell or on the host wins over the file, and a host that sets them needs no file. Install
+the loader with `venv/bin/pip install -r requirements.txt`.
+
+If a required variable is missing, or empty, the command stops with an error that names it.
+The served application refuses to start rather than failing on its first request. A database
+that is configured but does not answer is an error too: nothing falls back to another host.
+
+The tests run with `venv/bin/pytest`. A test marked `db`, which is most of them, **errors**,
+and is never skipped, when the database is unconfigured or unreachable, so a run with no
+database cannot pass. The tests that need no database still run without any configuration.
+The `db` tests create and drop a `mirror_test_<pid>` schema in whichever database
+`PGDATABASE` names, and never touch the `mirror` schema, so point them at a database you do
+not mind them writing to.
 
 ## Lists from the command line
 

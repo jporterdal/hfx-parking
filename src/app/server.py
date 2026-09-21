@@ -28,8 +28,8 @@ design.md M12 (server shape, decided, not revisited here):
   - The existing page, fed by a JSON API. No build step, no front-end
     framework, no working interface discarded.
   - Host-agnostic: the port and the database address come from the
-    environment (`PORT`; `HFX_MIRROR_DSN` via `mirror.db.dsn()`, unchanged).
-    Nothing here names a host.
+    environment (`PORT`; the `PG*` variables via `mirror.db.connect()`, from the
+    environment or a local `.env`). Nothing here names a host.
 
 Route table:
 
@@ -1192,7 +1192,14 @@ def create_app(conn_factory=None):
     A connection is opened and closed within each request; nothing is held across
     requests. Every list is computed per request (design.md M11) -- there is no
     cache here for 5.5 to have to work around.
+
+    With no `conn_factory` the database configuration is checked here, so a
+    deployment missing a required `PG*` variable fails while the worker boots
+    instead of answering every route with a 500. A supplied factory takes
+    responsibility for its own connections and skips the check.
     """
+    if conn_factory is None:
+        db.check_configured()
     app = Flask(__name__, static_folder=None)
     connect = conn_factory or db.connect
 
@@ -1533,9 +1540,10 @@ def create_app(conn_factory=None):
 def run():
     """Dev entry point: `python3 src/app/server.py`. Not what production runs --
     that is gunicorn against the repository-root `wsgi.py` -- but useful for a
-    quick local check without another dependency in the loop. Reads `PORT` from
-    the environment, same as production; binds every interface (0.0.0.0) rather
-    than naming a host, per design.md M12.
+    quick local check without another dependency in the loop. Reads `PORT` and
+    the `PG*` database variables from the environment (or a local `.env`), same
+    as production; binds every interface (0.0.0.0) rather than naming a host,
+    per design.md M12.
     """
     app = create_app()
     port = int(os.environ.get("PORT", "8000"))

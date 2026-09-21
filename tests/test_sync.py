@@ -1004,10 +1004,16 @@ def test_the_sync_reads_no_credential_from_the_environment():
     text = (db.SCHEMA_PATH.parent / "sync.py").read_text()
     for secret in ("token", "api_key", "apikey", "password", "secret", "credential"):
         assert f'"{secret}"' not in text.lower()
-    # The only environment the mirror reads is where its own database lives.
+    # The only environment the mirror reads is where its own database lives: the
+    # PG* variables libpq reads, and the schema inside it. Both the direct reads and
+    # the REQUIRED / OPTIONAL lists count, so a variable added either way fails this.
     import inspect
-    assert set(re.findall(r"environ\.get\(\"(\w+)\"", inspect.getsource(db))) == {
-        "HFX_MIRROR_DSN", "HFX_MIRROR_SCHEMA"}
+    source = inspect.getsource(db)
+    read = set(re.findall(r"environ(?:\.get)?[\[(]\s*\"(\w+)\"", source))
+    read |= set(re.findall(r"getenv\(\s*\"(\w+)\"", source))
+    read |= set(db.REQUIRED) | set(db.OPTIONAL)
+    assert read == {"PGHOST", "PGUSER", "PGDATABASE", "PGPASSWORD", "PGPORT",
+                    "HFX_MIRROR_SCHEMA"}
 
 
 def test_a_sync_takes_no_arguments_and_records_its_outcome(mirrored, service):

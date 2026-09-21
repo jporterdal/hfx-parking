@@ -11,8 +11,13 @@ To prove the first claim rather than trust it, run the suite with no network at 
 Postgres is reached over its unix socket, which a network namespace does not block:
 
     unshare -rn sh -c 'ip link set lo up; \
-        HFX_MIRROR_DSN="postgresql:///hfx_parking?host=/var/run/postgresql&user=ross" \
+        PGHOST=/var/run/postgresql PGUSER=ross PGDATABASE=hfx_parking \
         venv/bin/pytest'
+
+The database comes from the PG* variables or the local `.env` (see `.env.example`).
+A test marked `db` errors, never skips, when they are missing or the database does not
+answer, so a run that exercised no database code cannot look green. The tests that
+need no database still run without any configuration.
 """
 
 import json
@@ -107,14 +112,15 @@ def parking_features():
 
 @pytest.fixture(scope="session")
 def db():
-    """A connection to a throwaway schema, or a skip when Postgres is not there."""
+    """A connection to a throwaway schema in the database the PG* variables name.
+
+    An unconfigured or unreachable database raises here, so every test that
+    needs it errors. There is deliberately no skip.
+    """
     os.environ["HFX_MIRROR_SCHEMA"] = TEST_SCHEMA
     from mirror import db as mirror_db
 
-    try:
-        conn = mirror_db.connect()
-    except Exception as exc:  # no database, no db tests
-        pytest.skip(f"mirror database unavailable: {exc}")
+    conn = mirror_db.connect()
     _drop_stale_schemas(conn)
     conn.execute(f"DROP SCHEMA IF EXISTS {TEST_SCHEMA} CASCADE")
     conn.commit()

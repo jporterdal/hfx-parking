@@ -1,6 +1,6 @@
 ## Why
 
-`src/mirror/db.py` falls back to a connection string with a username and password written into it (`DEFAULT_DSN`, `postgresql://ross:hfx_local@127.0.0.1:5432/hfx_parking`) whenever `HFX_MIRROR_DSN` is unset. The credential is committed, has been in history since `5c244ba`, and the remote is on GitHub. It also means a checkout with no configuration at all connects quietly to whatever answers on `127.0.0.1:5432`, and a database that is unconfigured looks the same as one that is configured correctly.
+`src/mirror/db.py` falls back to a default connection string with a username and password written into it (`DEFAULT_DSN`) whenever `HFX_MIRROR_DSN` is unset. The credential is committed, has been in history since `5c244ba`, and the remote is on GitHub. It also means a checkout with no configuration at all connects quietly to whatever answers on `127.0.0.1:5432`, and a database that is unconfigured looks the same as one that is configured correctly.
 
 The test suite hides a second consequence. `tests/conftest.py`'s `db` fixture turns *any* connection failure into a skip, so a run with no reachable database reports green while every `db`-marked test, which is most of them, went unexercised. Removing the default without changing that fixture would make the hole wider, not smaller.
 
