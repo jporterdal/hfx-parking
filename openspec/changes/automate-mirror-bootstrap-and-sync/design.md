@@ -4,7 +4,7 @@ See `proposal.md` (Why) for the motivation and `specs/hrm-data-mirror/spec.md` a
 
 What exists now, from reading the code and the Railway documentation:
 
-- **`sync.py` already bootstraps.** `main()` calls `db.apply_schema()` first. `poll_layer` computes `advanced = baseline is None or observed > baseline`, and on an empty database `last_pulled_source_edit` finds neither a `sync_runs` row nor a `layer_state` row, so the baseline is `None` and every layer is reloaded in full through `full_reload`. No test drives `sync()` from a truly empty database; the tests start from a seeded `mirrored` fixture.
+- **`sync.py` already bootstraps.** `main()` calls `db.apply_schema()` first. `poll_layer` computes `advanced = baseline is None or observed > baseline`, and on an empty database `last_pulled_source_edit` finds no completed pull and no completed load, so the baseline is `None` and every layer is reloaded in full through `full_reload`. `tests/test_bootstrap.py` now drives `sync()` from a schema that does not exist; the older tests start from a seeded `mirrored` fixture.
 - **The scheduling state is already in Postgres.** `layer_state.next_due_at` is set to `now + POLL_INTERVAL` on every successful poll, and `status.py`'s overdue logic, which the served page displays, is built on it. It is written only on success: a failed poll leaves the old value in the past.
 - **Nothing serialises runs.** A grep of `src/` finds no advisory lock. `prepare_staging` begins `DROP TABLE IF EXISTS` on the staging table when it cannot resume, and `sync()` re-raises the first layer's exception, which skips the later layers and the two derived steps (`history.snapshot_after_sync`, `type_figures.after_sync`).
 - **The web app never applies the schema.** `create_app()` calls only `db.check_configured()`. Before the schema exists a route raises from psycopg and Flask answers 500; the freshness route already tolerates "schema present, nothing synced" (`test_freshness_route_with_no_sync_history_does_not_crash`).
@@ -53,12 +53,15 @@ Alternatives considered:
 ### D2. The worker loop
 
 ```
-start:   check_configured -> take the sync lock (D3) -> apply_schema -> sync -> release
-loop:    sleep(delay) -> take the lock -> sync -> release
+start:   check_configured                     (the only thing that ends the process)
+cycle:   open a connection -> take the sync lock (D3) -> apply_schema -> sync
+         -> release -> close
 delay:   after success   earliest layer_state.next_due_at - now, but at least 5 min
          after failure   FAILURE_BACKOFF (1 hour)
          lock was busy   LOCK_BUSY_RETRY (5 min), recorded as nothing
 ```
+
+The schema is applied on every cycle, not only at start. It is idempotent and cheap, it is the same thing `sync.py` does on every run, and it means a schema change reaches a running worker and a table dropped by hand is recreated. The first cycle against an empty database is the initial load; there is no separate first-run path.
 
 - **A connection per run, closed afterwards.** The lock lives as long as the connection, so it lives as long as the run. Holding one connection through a day-long sleep would meet whatever idle timeout the platform proxy applies.
 - **Success sleeps until the mirror's own promise.** Because the delay is derived from `next_due_at`, the "next update" the page shows and the moment the worker actually runs are one number by construction, and the overdue grace (`NEXT_UPDATE_GRACE_PERIOD`, one day) still measures a missed schedule.
@@ -69,12 +72,12 @@ delay:   after success   earliest layer_state.next_due_at - now, but at least 5 
 
 ### D3. A session-level advisory lock, taken at the entry points
 
-`db.py` gains one context manager that runs `pg_try_advisory_lock` on a fixed two-integer key on the connection doing the work and releases it on exit; a second holder gets a `SyncInProgress` exception. Postgres releases a session lock when the session ends, so a killed run frees it with no cleanup, which the spec requires.
+`db.py` gains one context manager that runs `pg_try_advisory_lock` on a two-integer key (a fixed namespace, and a number derived from the schema name, so the loaded mirror and a test schema in the same database do not contend) on the connection doing the work and releases it on exit; a second holder gets a `SyncInProgress` exception. Postgres releases a session lock when the session ends, so a killed run frees it with no cleanup, which the spec requires.
 
 - **Taken at the entry points**, not inside `sync()` or `full_reload()`: the worker, `sync.py`'s `main()` and `load.py`'s `main()`. Tests call the library functions on many connections and should not have to contend for it. A test asserts that each entry point takes the lock.
 - **Session-level, not transaction-level.** `full_reload` calls `conn.rollback()` on failure and commits per page, and neither touches a session lock, whereas a transaction-level lock would drop at the first commit.
 - **Try, don't wait.** A blocked run that waited would pile up behind a 25-minute reload. The worker treats "busy" as "not this time"; a manual command exits non-zero and says a run is in progress. The lock does not record who holds it, so the message cannot name the holder.
-- **Constraint:** the connection must reach Postgres directly or through a pooler in session mode. A transaction-mode pooler would break every session lock silently. Railway's Postgres service is reached directly; a task confirms it from the connection the worker actually gets.
+- **Constraint:** the connection must reach Postgres directly or through a pooler in session mode. A transaction-mode pooler would break every session lock silently. Railway's Postgres service is expected to be reached directly, but that is not confirmed: the owner checks it from the connection the worker actually gets when deploying by hand (Migration Plan, checklist item 1).
 
 Alternatives considered: a `sync_runs` row with `finished_at IS NULL` as the marker (rejected: a killed run leaves it behind and blocks every later run until someone deletes it, the exact failure the spec forbids); a lock file (rejected: the web and worker are separate containers with no shared filesystem).
 
@@ -86,7 +89,7 @@ A pre-deploy command on the web service was considered and rejected: it runs in 
 
 ### D5. Readiness is computed, and the lock is the truth about "running"
 
-A `status.mirror_readiness(conn)` returns one of the four states in the spec:
+A `status.mirror_readiness(conn)` returns one of the four states in the spec (on the wire and in code as `uninitialised`, `awaiting_first_load`, `loading` and `ready`):
 
 - **uninitialised**: `to_regclass` finds no `layer_state` table in the mirror schema.
 - **ready**: every tracked layer, the census layer included, has `layer_state.full_load_completed_at` set.
@@ -111,7 +114,7 @@ The spec sentence "no route fails with a server error" therefore means no *unhan
 
 `sync()` currently raises on the first layer failure, so a census outage would prevent the two Cityworks layers from being polled at all. It changes to attempt each layer in turn, collect a failure per layer in the outcome, and report the run as failed if any layer failed. `sync.py`'s `main()` exits non-zero and the worker applies the failure backoff.
 
-The catch is that isolation makes a new state reachable: `service_requests` reloaded and `custom_fields` then failed. The archived design treats the pair as one publish event, and the retained lists and per-type figures (`history.snapshot_after_sync`, `type_figures.after_sync`) would describe a mixture. So those steps run only when no Cityworks layer failed in the run. The mixture in the live tables is the pre-existing window (Non-Goals); the failure only makes it last until the next attempt, which the four freshness clocks already report through `behind_source`.
+The catch is that isolation makes a new state reachable: `service_requests` reloaded and `custom_fields` then failed. The archived design treats the pair as one publish event, and the retained lists and per-type figures (`history.snapshot_after_sync`, `type_figures.after_sync`) would describe a mixture. So those steps run only when no Cityworks layer failed in the run. One visible consequence: a run in which everything fails now records one failed poll per layer, three, where the first failure used to end the run at one. The mixture in the live tables is the pre-existing window (Non-Goals); the failure only makes it last until the next attempt, which the four freshness clocks already report through `behind_source`.
 
 ### D8. Railway setup is documented, not committed
 
@@ -135,25 +138,39 @@ The web service is up as soon as gunicorn starts, so a viewer can arrive at any 
   No duration is stated. About 25 minutes is a local measurement and the Railway figure is unrecorded until the first deployment (see the risks), and `tests/test_page_claims.py`-style checks exist so that the page does not assert what the mirror cannot support. No progress figure is shown either; `load_progress` holds one and could feed a later change.
 - **The page recovers by itself.** While not ready it polls `/api/freshness` every 30 seconds. The moment the state is `ready` it reloads the page once. It does not try to fill the lists in place: `web/app/index.html`'s own comments say its render pipeline was never written to cope with a data swap during the page's life, and a single reload uses the ordinary boot path, so a ready page is identical however it was reached.
 - **A 503 is a state, not a failure.** With the schema absent, `/api/freshness` answers 503 with the state in its body (D6). The page reads that body as `uninitialised` and keeps polling. A fetch that fails for any other reason (a network error, a non-JSON body) leaves the previous message on screen and tries again at the next tick; it neither reports the mirror as ready nor as failed.
+- **The eyebrow loses its date.** The header line reads "violation type: … · open data to …". Before a load there is no date to name, and writing words into the gap ("open data to not loaded yet") read as broken grammar in the browser, so the whole "open data to" clause is hidden while not ready.
 - **Polling stops when it is over.** Nothing polls once the state is `ready`, so a ready page makes no more requests than it does today.
 
 ## Risks / Trade-offs
 
-- **[Risk] The bootstrap path is unproven.** The reasoning that `sync()` bootstraps an empty database is from reading the code. The first task is a test that runs it against an empty schema with the source stubbed, before anything is built on it. `retain_version` is called with a `None` baseline and the derived steps run on a first pull; either may not tolerate an empty mirror.
-- **[Risk] Disk headroom on the Postgres plan.** A reload holds the live and the staged copies together, about 375 MB each plus WAL, and the first load through `sync()` also stages a full copy before the swap into an empty table, where `load.py` writes directly. → Check the plan's storage limit before deploying, and compare it with the database size recorded during the first load (Migration Plan, step 3). A bootstrap that loads directly when the live table is empty would halve the peak and is left as an open question.
-- **[Risk] Load time and rate limits from Railway are unmeasured.** 25 minutes was measured on a local machine, and HRM's limits are unknown. `source.post` retries four times at 180 seconds each. → The first deployment records its own time in `sync_runs`; nothing in the code assumes the local figure.
+- **[Risk, resolved by tasks 1.1 to 1.4] The bootstrap path was unproven.** The premise that `sync()` populates an empty database held: a test now runs it against a schema that does not exist. The same test family found one defect: `last_pulled_source_edit` fell back to `layer_state.source_last_edit`, which a poll writes before any reload starts, so a first load that died part-way (an HRM error, a SIGTERM on redeploy) left the poll's own observation as the baseline. The next run reported "nothing to do" against an empty mirror and never resumed the staged copy, while the poll kept recording successes. The fallback now requires a completed load. This was the exact failure the worker exists to survive, so D2's restart behaviour depends on it.
+- **[Risk] Disk headroom on the Postgres plan.** A reload holds the live and the staged copies together, about 375 MB each plus WAL, and the first load through `sync()` also stages a full copy before the swap into an empty table, where `load.py` writes directly. → The owner checks the plan's storage limit before deploying, and compares it with the database size recorded during the first load (Migration Plan, checklist items 2 and 3). A bootstrap that loads directly when the live table is empty would halve the peak and is left as an open question.
+- **[Risk] Load time and rate limits from Railway are unmeasured.** 25 minutes was measured on a local machine, and HRM's limits are unknown. `source.post` retries four times at 180 seconds each. → The first deployment records its own time in `sync_runs` (Migration Plan, checklist item 3); nothing in the code assumes the local figure.
 - **[Risk] Web and worker deploy skew.** New web code can start before the worker has applied a new `schema.sql`, and the schema has no version table. → Changes stay additive, and D6 already answers a missing table with a state instead of an error. A change that needs a column before it exists would still fail on the routes that read it.
-- **[Risk] A session lock and a pooler.** See D3. → A task checks the actual Railway connection path.
+- **[Risk] A session lock and a pooler.** See D3. → Not confirmed by this change. The owner checks the actual Railway connection path at the first deployment (Migration Plan, checklist item 1); until then it is an assumption from how the service is usually reached.
 - **[Risk] A dead worker is silent until the page says overdue.** That is two days after the last success (`next_due_at` one day out, plus a one-day grace). → The overdue state remains the signal. Alerting is an open question, not a hidden gap.
 - **[Trade-off] One more always-on service.** A mostly idle Python process is a small, standing cost, accepted for a defined first run and no scheduler dependency.
 - **[Trade-off] The clean-up of a failed run is "wait for the next run".** No repair is attempted between runs (see the retry requirement), so a first load that fails at HRM's end is empty for at least the backoff.
 
 ## Migration Plan
 
+The Railway deployment is done by hand by the repository owner. It is intentionally not part of this change's implementation tasks (tasks 6.2 and 7.1 to 7.5 are retired), and nothing here has been run on Railway.
+
 1. Merge with the worker and the lock. Existing deployments keep working: `sync.py` and `load.py` behave as before with the lock added.
-2. In Railway, add the worker service from the same repository with the worker start command and the shared `PG*` variables.
-3. Deploy. The web service shows the loading state while the worker loads; watch `sync_runs` and the service logs, and record the first-load time and the database size.
+2. In Railway, add the worker service from the same repository with the worker start command and the shared `PG*` variables, following the README's "Deploying on Railway" section.
+3. Deploy. The web service shows the loading state while the worker loads; watch `sync_runs` and the service logs.
 4. Confirm the overdue and freshness states against a stopped worker before relying on them.
+
+**Checklist for the owner at the first deployment.** These are what the retired tasks described, kept because the risks above lean on them:
+
+1. **The lock works over Railway's connection.** From two separate connections built from the deployed variables, take `db.sync_lock` on one and confirm the other is refused with `SyncInProgress`. Note whether the path is direct or pooled; a transaction-mode pooler would break the lock silently (D3).
+2. **Storage headroom.** Note the Postgres plan's storage limit and compare it with two copies of the data (about 375 MB each) plus write-ahead log.
+3. **The first load.** Record the elapsed time, the database size and the request count from `sync_runs`, and note them here: they replace the local figures the risks quote.
+4. **A redeploy during the first load.** Redeploy the worker while it is loading, and confirm the new instance reports another run in progress or resumes the staged copy, never two loads interleaving, and that the load still completes.
+5. **The recurrence.** After the first sync, confirm the worker's next wake time equals the `next_due_at` the page shows, and that the next sync records a poll with no reload.
+6. **The runbook.** Follow the README section unaided against the fresh environment; correct it where it was wrong.
+
+**What was verified locally in place of these.** The worker was run against the real HRM service into a throwaway schema, killed mid-load and restarted, and it resumed and finished (task 4.4); the not-ready page and its recovery were driven in headless Chromium against the real server (tasks 5.5 and 5.6); and the lock, the loop, the readiness states and the failure handling are covered by tests. None of that is a Railway figure.
 
 Rollback: stop the worker service. The manual commands remain valid, and the lock keeps them safe if run while the worker is up.
 

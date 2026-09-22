@@ -804,7 +804,8 @@ def test_every_retained_version_carries_what_m2a_asks_for(mirrored, service,
 
 
 def test_the_design_records_when_the_question_is_next_examined():
-    text = (REPO / "openspec/changes/mirror-hrm-data-and-host-app/design.md").read_text()
+    text = (REPO / "openspec/changes/archive/2026-09-21-mirror-hrm-data-and-host-app"
+            / "design.md").read_text()
     m2a = text.split("### M2a")[1].split("### M3")[0]
     assert "four publishes" in m2a
     assert "sync.py --versions" in m2a
@@ -1120,8 +1121,9 @@ def test_a_failed_poll_is_a_row_and_leaves_the_held_version_alone(mirrored, serv
         raise OSError("connection reset by peer")
 
     monkeypatch.setattr(source, "last_edit_date", explode)
-    with pytest.raises(OSError):
-        sync.sync(mirrored, now=NOW, log=lambda m: None)
+    outcome = sync.sync(mirrored, now=NOW, log=lambda m: None)
+    assert not outcome["ok"]
+    assert all(e.startswith("OSError") for e in outcome["errors"].values())
 
     failed = runs(mirrored, kind="poll", layer="service_requests")[-1]
     assert failed[3] is False and "connection reset" in failed[8]
@@ -1316,8 +1318,9 @@ def test_repeated_failure_advances_attempt_but_not_success(mirrored, service,
 
     monkeypatch.setattr(source, "last_edit_date", explode)
     for day in (1, 2, 3):
-        with pytest.raises(OSError):
-            sync.sync(mirrored, now=NOW + day * DAY, log=lambda m: None)
+        outcome = sync.sync(mirrored, now=NOW + day * DAY, log=lambda m: None)
+        assert not outcome["ok"]
+        assert all(e.startswith("OSError") for e in outcome["errors"].values())
 
     attempt, success, ok = one(
         mirrored, "SELECT last_attempt_at, last_success_at, last_attempt_ok "

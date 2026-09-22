@@ -57,9 +57,14 @@ Run:  python3 src/mirror/sync.py                  # poll every layer, reload wha
       python3 src/mirror/sync.py --history        # observed source-update intervals
       python3 src/mirror/sync.py --versions       # retained versions, and whether
                                                   # identifiers survived a publish
+
+Every mode that writes takes the mirror's sync lock first (`db.sync_lock`): if another
+sync, load or reload is running it prints so, changes nothing and exits 75. `--history`
+and `--versions` only read, and do not take it.
 """
 
 import argparse
+import contextlib
 import datetime
 import json
 import os
@@ -196,6 +201,13 @@ def last_pulled_source_edit(conn, layer_key):
     pull has recorded one — the initial load predates the column being written —
     `layer_state` is the fallback, so a first sync does not reload the static census
     layer merely because the history is thin.
+
+    The fallback applies only to a layer that has *completed* a load
+    (`full_load_completed_at`). A poll writes `source_last_edit` before any reload
+    starts, so without that condition a first load that died part-way would leave the
+    poll's own observation behind as the baseline: the next run would see nothing
+    advanced, report "nothing to do" against an empty mirror, and never resume the
+    staged copy. A layer that has never completed a load has no baseline.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -208,7 +220,8 @@ def last_pulled_source_edit(conn, layer_key):
         row = cur.fetchone()
         if row and row[0]:
             return row[0]
-        cur.execute("SELECT source_last_edit FROM layer_state WHERE layer = %s",
+        cur.execute("SELECT source_last_edit FROM layer_state "
+                    "WHERE layer = %s AND full_load_completed_at IS NOT NULL",
                     (layer_key,))
         row = cur.fetchone()
         return row[0] if row else None
@@ -698,30 +711,62 @@ def sync(conn, layers=None, now=None, force_pull=False, poll_only=False,
     a pull that the version clock did not ask for would re-fetch 213 MB to write back
     what the mirror already holds. The static census layer needs no special case for
     that any more — it is not re-pulled because it does not move.
+
+    **A layer that fails does not stop the others.** Each layer is attempted in turn;
+    an exception is recorded against that layer in `outcome["errors"]` (and in
+    `sync_runs`, where the poll and the reload already write their own failures) and
+    the loop carries on. A census outage must not keep the two Cityworks layers from
+    being polled. The run as a whole is failed if `outcome["errors"]` is not empty:
+    the caller (`main()`, the worker) treats it so, and nothing is retried in here.
+
+    **Derived products need a consistent pair.** The retained lists and the per-type
+    figures are produced only when neither Cityworks layer failed. The two are one
+    publish event (design.md M3); if one reloaded and the other did not, what is held
+    is a mixture of two versions and anything derived from it would describe neither.
     """
     now = now or utcnow()
     chosen = layers or [source.LAYERS[k] for k in SYNC_ORDER]
-    outcome = {"started_at": now, "layers": {}, "pulled": []}
+    outcome = {"started_at": now, "layers": {}, "pulled": [], "errors": {}}
 
     for layer in chosen:
-        polled = poll_layer(conn, layer, now, log)
-        pull = not poll_only and (force_pull or polled["advanced"])
-        entry = dict(polled)
-        entry["pulled"] = pull
-        entry["reason"] = ("forced" if force_pull and pull else
-                           "source advanced" if polled["advanced"] else
-                           "nothing to do")
-        if pull:
-            entry["reload"] = full_reload(conn, layer, polled["observed"], now,
-                                          log=log)
-            outcome["pulled"].append(layer.key)
-        else:
-            # 3.5: a layer not being reloaded this run still gets checked against
-            # the service's own count, so a mirror that has quietly drifted is
-            # caught on an ordinary quiet night rather than only at the next
-            # publish.
-            entry["reconcile"] = reconcile_layer(conn, layer, polled["run_id"], now,
-                                                 log)
+        entry = {"layer": layer.key, "observed": None, "baseline": None,
+                 "advanced": False, "pulled": False, "reason": "failed"}
+        try:
+            polled = poll_layer(conn, layer, now, log)
+            pull = not poll_only and (force_pull or polled["advanced"])
+            entry.update(polled)
+            entry["pulled"] = pull
+            entry["reason"] = ("forced" if force_pull and pull else
+                               "source advanced" if polled["advanced"] else
+                               "nothing to do")
+            if pull:
+                entry["reload"] = full_reload(conn, layer, polled["observed"], now,
+                                              log=log)
+                outcome["pulled"].append(layer.key)
+                if not entry["reload"].get("swapped"):
+                    # Not an exception, but not a completed load either: the held
+                    # version stands and the next run continues the staged copy.
+                    raise RuntimeError(
+                        "staging fill incomplete; the held version was not replaced")
+            else:
+                # 3.5: a layer not being reloaded this run still gets checked against
+                # the service's own count, so a mirror that has quietly drifted is
+                # caught on an ordinary quiet night rather than only at the next
+                # publish.
+                entry["reconcile"] = reconcile_layer(conn, layer, polled["run_id"],
+                                                     now, log)
+        except Exception as exc:
+            entry["reason"] = "failed"
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+            outcome["errors"][layer.key] = entry["error"]
+            log(f"{layer.key}: FAILED — {entry['error']}")
+            # The poll and the reload record their own failures; a failed reconcile
+            # did not, so make sure the layer shows a failed attempt either way. If
+            # the connection itself is gone this cannot be recorded, and the next
+            # layer will say the same thing.
+            with contextlib.suppress(Exception):
+                conn.rollback()
+                touch_layer(conn, layer.key, now, False)
         outcome["layers"][layer.key] = entry
 
     # 8.6: retain the doorway and block lists this sync produced, so which doorway
@@ -731,6 +776,16 @@ def sync(conn, layers=None, now=None, force_pull=False, poll_only=False,
     # module has finished initializing, so the import below is safe. See
     # `mirror/history.py`'s module docstring for why this only fires when
     # `outcome["pulled"]` is non-empty.
+    broken_pair = [k for k in CITYWORKS if k in outcome["errors"]]
+    if broken_pair:
+        log(f"not producing the retained lists or per-type figures: "
+            f"{', '.join(broken_pair)} failed, so the two Cityworks layers may be at "
+            f"different published versions")
+        outcome["snapshots"] = []
+        outcome["type_figures"] = []
+        outcome["ok"] = False
+        return outcome
+
     from mirror import history
     outcome["snapshots"] = history.snapshot_after_sync(conn, outcome, now, log=log)
 
@@ -745,6 +800,7 @@ def sync(conn, layers=None, now=None, force_pull=False, poll_only=False,
     from mirror import type_figures
     outcome["type_figures"] = type_figures.after_sync(conn, outcome, now, log=log)
 
+    outcome["ok"] = not outcome["errors"]
     return outcome
 
 
@@ -784,6 +840,8 @@ def describe(outcome):
             )
     if not outcome["pulled"]:
         lines.append("no layer was reloaded: no published version advanced")
+    for key, error in sorted(outcome.get("errors", {}).items()):
+        lines.append(f"FAILED {key}: {error}")
     for snap in outcome.get("snapshots") or []:
         if snap["ok"]:
             lines.append(f"  retained {snap['violation_type']}: "
@@ -849,8 +907,23 @@ def main():
 
     layers = [source.LAYERS[k] for k in (args.layer or SYNC_ORDER)]
     conn = db.connect()
-    db.apply_schema(conn)
 
+    if args.history or args.versions:
+        # Reads only, so neither takes the lock nor waits behind a running sync.
+        db.apply_schema(conn)
+        return report_only(conn, layers, args)
+
+    # Every other mode writes, and a second run would race this one's staging table.
+    try:
+        with db.sync_lock(conn):
+            db.apply_schema(conn)
+            return run_locked(conn, layers, args)
+    except db.SyncInProgress as exc:
+        print(f"sync.py: {exc}", file=sys.stderr)
+        return db.EXIT_SYNC_IN_PROGRESS
+
+
+def report_only(conn, layers, args):
     if args.history:
         for layer in layers:
             print(f"{layer.key}:")
@@ -865,11 +938,12 @@ def main():
                       "updates observed")
         return 0
 
-    if args.versions:
-        for layer in layers:
-            print(describe_versions(conn, layer.key))
-        return 0
+    for layer in layers:
+        print(describe_versions(conn, layer.key))
+    return 0
 
+
+def run_locked(conn, layers, args):
     if args.reload:
         results = [full_reload(conn, layer) for layer in layers]
         for r in results:
@@ -881,7 +955,7 @@ def main():
     outcome = sync(conn, layers, poll_only=args.poll_only,
                    force_pull=args.force_pull)
     print(describe(outcome))
-    return 0
+    return 0 if outcome["ok"] else 1
 
 
 if __name__ == "__main__":

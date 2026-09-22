@@ -45,8 +45,9 @@ def test_a_repeatedly_failing_sync_reports_a_recent_attempt_and_a_stale_success(
 
     monkeypatch.setattr(sync.source, "last_edit_date", explode)
     for day in (1, 2):
-        with pytest.raises(OSError):
-            sync.sync(mirrored, now=NOW + day * DAY, log=lambda m: None)
+        outcome = sync.sync(mirrored, now=NOW + day * DAY, log=lambda m: None)
+        assert not outcome["ok"]
+        assert all(e.startswith("OSError") for e in outcome["errors"].values())
 
     result = status.layer_freshness(mirrored, "service_requests")
 
@@ -125,8 +126,9 @@ def test_behind_the_source_when_hrm_has_published_since_the_last_pull(mirrored,
         raise OSError("connection reset by peer")
 
     monkeypatch.setattr(sync, "full_reload", explode_reload)
-    with pytest.raises(OSError):
-        sync.sync(mirrored, now=NOW, log=lambda m: None)
+    outcome = sync.sync(mirrored, now=NOW, log=lambda m: None)
+    assert not outcome["ok"]
+    assert all(e.startswith("OSError") for e in outcome["errors"].values())
 
     result = status.layer_freshness(mirrored, "service_requests")
 
@@ -173,8 +175,9 @@ def test_mirror_freshness_is_behind_if_any_currency_layer_is(mirrored, service,
         return real_reload(conn, layer, *a, **k)
 
     monkeypatch.setattr(sync, "full_reload", reload_unless_custom_fields)
-    with pytest.raises(OSError):
-        sync.sync(mirrored, now=NOW, log=lambda m: None)
+    outcome = sync.sync(mirrored, now=NOW, log=lambda m: None)
+    assert not outcome["ok"]
+    assert all(e.startswith("OSError") for e in outcome["errors"].values())
 
     result = status.mirror_freshness(mirrored)
 

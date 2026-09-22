@@ -13,6 +13,11 @@ them. `create_app()` below checks them, so a missing one stops the worker bootin
 instead of failing the first request. Nothing in this file names a host
 (design.md M12).
 
+This process only reads the mirror; it never creates or fills it. A third command,
+`python3 src/mirror/worker.py`, is run as its own process beside this one and does
+that: it creates the schema, does the first load and keeps the mirror current. Until
+it has finished a first load the served page says so.
+
 For a quick local check without gunicorn in the loop, `python3 src/app/server.py`
 runs the Flask development server against the same `PORT` and `PG*` variables.
 """

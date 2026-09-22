@@ -21,6 +21,9 @@ Run:  python3 src/mirror/load.py                 # every layer, resuming if inte
       python3 src/mirror/load.py --layer census_areas
       python3 src/mirror/load.py --restart        # discard progress and page from zero
       python3 src/mirror/load.py --report         # stored vs the service's own counts
+
+Every mode but `--report` takes the mirror's sync lock first (`db.sync_lock`): if another
+sync, load or reload is running it prints so, changes nothing and exits 75.
 """
 
 import argparse
@@ -408,12 +411,24 @@ def main():
 
     layers = [source.LAYERS[k] for k in (args.layer or sorted(source.LAYERS))]
     conn = db.connect()
-    db.apply_schema(conn)
 
     if args.report:
+        # Reads only, so it neither takes the lock nor waits behind a running load.
+        db.apply_schema(conn)
         print(report(conn, layers))
         return 0
 
+    # Everything below writes, and a second run would race this one's staging table.
+    try:
+        with db.sync_lock(conn):
+            db.apply_schema(conn)
+            return load_all(conn, layers, args)
+    except db.SyncInProgress as exc:
+        print(f"load.py: {exc}", file=sys.stderr)
+        return db.EXIT_SYNC_IN_PROGRESS
+
+
+def load_all(conn, layers, args):
     started = time.monotonic()
     results = [
         load_layer(conn, layer, args.page_size, args.restart, args.limit_pages)
