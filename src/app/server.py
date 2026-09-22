@@ -28,8 +28,8 @@ design.md M12 (server shape, decided, not revisited here):
   - The existing page, fed by a JSON API. No build step, no front-end
     framework, no working interface discarded.
   - Host-agnostic: the port and the database address come from the
-    environment (`PORT`; `HFX_MIRROR_DSN` via `mirror.db.dsn()`, unchanged).
-    Nothing here names a host.
+    environment (`PORT`; the `PG*` variables via `mirror.db.connect()`, from the
+    environment or a local `.env`). Nothing here names a host.
 
 Route table:
 
@@ -254,6 +254,7 @@ _SRC_DIR = _REPO_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
+import psycopg  # noqa: E402
 from flask import (  # noqa: E402
     Flask, Response, jsonify, render_template_string, request, send_from_directory,
 )
@@ -751,7 +752,23 @@ def _next_source_estimate(history, now=None):
     }
 
 
-def _freshness_payload(freshness, now=None, history=None):
+def _next_update_before_first_load(grace_days):
+    """The next-update state of a mirror that has never completed a load.
+
+    Nothing has been promised yet, so there is nothing to be overdue on: a viewer told
+    that a first load is "overdue" would read an ordinary first run as a fault
+    (hosted-triage-app: "Say when the mirror is not ready"). Same shape as the
+    "no due time recorded" state, with the reason stated.
+    """
+    return {
+        "known": False, "overdue": False, "days_overdue": None,
+        "seconds_overdue": None, "due_passed": False,
+        "grace_period_days": grace_days,
+        "reason": "the mirror has not completed its first load",
+    }
+
+
+def _freshness_payload(freshness, now=None, history=None, readiness=None):
     """The `GET /api/freshness` JSON body: a thin reshaping of
     `mirror.status.mirror_freshness`'s dict (every field except
     `stale_call_warning`, `behind_reason` and `next_source_estimate` is read
@@ -766,7 +783,14 @@ def _freshness_payload(freshness, now=None, history=None):
     """
     now = now or datetime.datetime.now(datetime.timezone.utc)
     next_update = _next_update_state(freshness, now=now)
+    if readiness not in (None, status.READY) and next_update["known"]:
+        # A due time exists (a poll recorded one) but nothing has finished loading, so
+        # it is not a promise anyone can be late on.
+        next_update = _next_update_before_first_load(next_update["grace_period_days"])
     return {
+        # `readiness` (design.md D5) is one of `mirror.status`'s four states, or None
+        # for a caller that did not ask. The page branches on it before anything else.
+        "readiness": readiness,
         "checked_at": _iso_utc(now),
         "most_recent_call_date": _iso_utc(freshness["most_recent_call_date"]),
         "last_success_at": _iso_utc(freshness["last_success_at"]),
@@ -968,9 +992,10 @@ def _freshness_for_export(conn):
     a black box; nothing here recomputes any of `_call_staleness`/
     `_behind_reason`/`_next_update_state`/`_next_source_estimate`.
     """
+    readiness = status.mirror_readiness(conn)
     fresh = status.mirror_freshness(conn)
     history = sync.source_edit_history(conn, status.DATA_LAYER)
-    return _freshness_payload(fresh, history=history)
+    return _freshness_payload(fresh, history=history, readiness=readiness)
 
 
 # Readable column headers for the CSV/brief tables, in the abbreviated keys
@@ -1012,6 +1037,18 @@ def _write_csv_table(writer, columns, payload_rows, type_name):
             "; ".join(row[key]) if key == "addrs" else row.get(key)
             for key, _ in columns
         ] + [type_name])
+
+
+def _export_not_ready_note(freshness_data):
+    """What an export says at its head when the mirror is not ready, or None. An export
+    of an empty mirror is a file with empty tables, and someone who is mailed it cannot
+    reload a page to see why: it has to say so itself (hosted-triage-app: "Say when the
+    mirror is not ready")."""
+    readiness = freshness_data.get("readiness")
+    if readiness in (None, status.READY):
+        return None
+    return (f"{_NOT_READY_MESSAGES[readiness]} The lists below are empty because "
+            "nothing has been loaded, not because nothing matched the filters.")
 
 
 def _export_csv_text(canonical, slug, filters, result, freshness_data, figures_result):
@@ -1059,6 +1096,10 @@ def _export_csv_text(canonical, slug, filters, result, freshness_data, figures_r
     w.writerow([])
 
     w.writerow(["checked_at", freshness_data["checked_at"]])
+    w.writerow(["mirror_readiness", freshness_data["readiness"]])
+    not_ready_note = _export_not_ready_note(freshness_data)
+    if not_ready_note:
+        w.writerow(["mirror_not_ready", not_ready_note])
     w.writerow(["most_recent_call_date", freshness_data["most_recent_call_date"]])
     w.writerow(["last_success_at", freshness_data["last_success_at"]])
     w.writerow(["last_attempt_at", freshness_data["last_attempt_at"]])
@@ -1116,6 +1157,8 @@ _EXPORT_BRIEF_TEMPLATE = """<!doctype html>
 <a href="/types/{{ slug }}">Open the live view</a> &middot;
 <a href="/api/types/{{ slug }}/export.csv{{ query_string }}">Download the complete table (CSV)</a></p>
 
+{% if not_ready_note %}<p><b>Not ready:</b> {{ not_ready_note }}</p>{% endif %}
+
 <h2>Filters in effect</h2>
 {% if filter_bits %}
 <p>Filtered by {{ filter_bits|join(", ") }}.</p>
@@ -1134,6 +1177,7 @@ _EXPORT_BRIEF_TEMPLATE = """<!doctype html>
 <h2>Freshness</h2>
 <ul>
   <li>Checked at: {{ freshness.checked_at }}</li>
+  <li>Mirror: {{ freshness.readiness }}</li>
   <li>Most recent call in the data: {{ freshness.most_recent_call_date or "unknown" }}</li>
   <li>Last successful sync: {{ freshness.last_success_at or "never" }}</li>
   <li>Next update due: {{ freshness.next_due_at or "unknown" }}</li>
@@ -1161,7 +1205,7 @@ _EXPORT_BRIEF_TEMPLATE = """<!doctype html>
 {% for row in doorways %}<tr>{% for key, _ in doorway_columns %}<td>{{ row[key]|join("; ") if key == "addrs" else ("&ndash;"|safe if row[key] is none else row[key]) }}</td>{% endfor %}</tr>
 {% endfor %}</table>
 {% else %}
-<p>No doorways match {{ filter_summary_sentence }}.</p>
+<p>{% if not_ready_note %}Nothing has been loaded yet.{% else %}No doorways match {{ filter_summary_sentence }}.{% endif %}</p>
 {% endif %}
 
 <h2>Blocks ({{ block_count }})</h2>
@@ -1172,7 +1216,7 @@ _EXPORT_BRIEF_TEMPLATE = """<!doctype html>
 {% for row in blocks %}<tr>{% for key, _ in block_columns %}<td>{{ row[key]|join("; ") if key == "addrs" else ("&ndash;"|safe if row[key] is none else row[key]) }}</td>{% endfor %}</tr>
 {% endfor %}</table>
 {% else %}
-<p>No blocks match {{ filter_summary_sentence }}.</p>
+<p>{% if not_ready_note %}Nothing has been loaded yet.{% else %}No blocks match {{ filter_summary_sentence }}.{% endif %}</p>
 {% endif %}
 
 </body>
@@ -1181,6 +1225,38 @@ _EXPORT_BRIEF_TEMPLATE = """<!doctype html>
 
 
 # --------------------------------------------------------------- app factory
+
+
+# Task 5.3: what a route answers when there is no mirror to read yet.
+_NOT_READY_MESSAGES = {
+    status.UNINITIALISED: "The mirror has not been set up yet. Its structure does not "
+                          "exist in the database, so nothing has been loaded.",
+    status.AWAITING_FIRST_LOAD: "The mirror's first load has not completed and will be "
+                                "attempted again.",
+    status.LOADING: "The mirror is being loaded for the first time.",
+}
+
+
+def _not_ready_response(readiness):
+    """503, not 500: the service is deliberately not available yet, and says why.
+
+    An `/api/` route answers with JSON naming the state, so a client can branch on it;
+    any other route is a page, and answers with a rendered explanation. `Retry-After`
+    is a courtesy to whatever is calling.
+    """
+    message = _NOT_READY_MESSAGES.get(readiness, "")
+    if request.path.startswith("/api/"):
+        response = jsonify(error="not_ready", readiness=readiness, message=message)
+    else:
+        response = Response(
+            "<!doctype html><meta charset=utf-8><title>Not ready yet</title>"
+            f"<h1>Not ready yet</h1><p>{message}</p>"
+            "<p>This is expected on a new deployment, and it clears by itself once the "
+            "first load has finished.</p>",
+            mimetype="text/html")
+    response.status_code = 503
+    response.headers["Retry-After"] = "30"
+    return response
 
 
 def create_app(conn_factory=None):
@@ -1192,9 +1268,35 @@ def create_app(conn_factory=None):
     A connection is opened and closed within each request; nothing is held across
     requests. Every list is computed per request (design.md M11) -- there is no
     cache here for 5.5 to have to work around.
+
+    With no `conn_factory` the database configuration is checked here, so a
+    deployment missing a required `PG*` variable fails while the worker boots
+    instead of answering every route with a 500. A supplied factory takes
+    responsibility for its own connections and skips the check.
     """
+    if conn_factory is None:
+        db.check_configured()
     app = Flask(__name__, static_folder=None)
     connect = conn_factory or db.connect
+
+    @app.errorhandler(psycopg.errors.UndefinedTable)
+    def missing_table(exc):
+        """A route reached for a table that does not exist. If that is because the
+        mirror's structure has not been created (the worker has not run yet), answer
+        with the state instead of an unhandled 500. Anything else missing a table is a
+        genuine bug and is left to be one: readiness is asked again, not assumed."""
+        conn = None
+        try:
+            conn = connect()
+            readiness = status.mirror_readiness(conn)
+        except Exception:
+            raise exc
+        finally:
+            if conn is not None:
+                conn.close()
+        if readiness != status.UNINITIALISED:
+            raise exc
+        return _not_ready_response(readiness)
 
     @app.get("/")
     def index():
@@ -1437,11 +1539,14 @@ def create_app(conn_factory=None):
         """
         conn = connect()
         try:
+            readiness = status.mirror_readiness(conn)
+            if readiness == status.UNINITIALISED:
+                return _not_ready_response(readiness)
             fresh = status.mirror_freshness(conn)
             history = sync.source_edit_history(conn, status.DATA_LAYER)
         finally:
             conn.close()
-        return jsonify(_freshness_payload(fresh, history=history))
+        return jsonify(_freshness_payload(fresh, history=history, readiness=readiness))
 
     @app.get("/api/types/<slug>/export.csv")
     def export_csv(slug):
@@ -1519,6 +1624,7 @@ def create_app(conn_factory=None):
             filter_summary_sentence=(_active_filter_summary(filters) or "the current filters"),
             recency_note=_recency_note(filters, latest),
             freshness=freshness_data,
+            not_ready_note=_export_not_ready_note(freshness_data),
             tow_sentence=_tow_thesis_sentence(figures_result),
             limits=_INTERPRETATION_LIMITS,
             doorway_count=len(doorway_rows), block_count=len(block_rows),
@@ -1533,9 +1639,10 @@ def create_app(conn_factory=None):
 def run():
     """Dev entry point: `python3 src/app/server.py`. Not what production runs --
     that is gunicorn against the repository-root `wsgi.py` -- but useful for a
-    quick local check without another dependency in the loop. Reads `PORT` from
-    the environment, same as production; binds every interface (0.0.0.0) rather
-    than naming a host, per design.md M12.
+    quick local check without another dependency in the loop. Reads `PORT` and
+    the `PG*` database variables from the environment (or a local `.env`), same
+    as production; binds every interface (0.0.0.0) rather than naming a host,
+    per design.md M12.
     """
     app = create_app()
     port = int(os.environ.get("PORT", "8000"))

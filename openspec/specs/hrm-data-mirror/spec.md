@@ -1,10 +1,12 @@
+# hrm-data-mirror Specification
+
 ## Purpose
 
 Holds a local copy of the Halifax Regional Municipality layers the product reads — service requests, custom fields and census dissemination areas — so that analysis over any violation type is a query against data already held rather than a pass over the network, and so that the cost of tracking thirty violation types is a grouping operation rather than thirty times the network load.
 
 A mirror can be stale in a way a live query cannot, so this capability is responsible for making its own freshness observable. Every requirement below that concerns provenance exists because a silently stalled sync produces an application that looks healthy while serving old data.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Hold a local copy of the source layers
 
@@ -128,12 +130,12 @@ A layer that does not change — the census dissemination areas have not been ed
 
 ### Requirement: Run unattended
 
-The sync SHALL run with no credentials and no human involvement, and SHALL record its outcome.
+The sync SHALL run with no source credentials and no human involvement, and SHALL record its outcome.
 
 #### Scenario: Scheduled sync runs unattended
 
 - **WHEN** the schedule fires
-- **THEN** the sync runs without credentials and records its outcome
+- **THEN** the sync runs without source credentials and records its outcome
 
 ### Requirement: Record the outcome of every sync attempt
 

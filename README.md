@@ -18,16 +18,87 @@ its slug).
 The served application persists triage decisions in the mirror's own database, so anyone who
 visits its URL sees the same triage state, and a team works one shared list instead of three.
 
-To run it yourself you need the mirror's Postgres database, whose address is read from
-`HFX_MIRROR_DSN`, and a `PORT` (default 8000):
+To run it yourself you need the mirror's Postgres database, configured as described under
+[Database configuration](#database-configuration), and a `PORT` (default 8000):
 
 ```bash
 python3 src/app/server.py                                    # development server
 venv/bin/gunicorn wsgi:app --bind 0.0.0.0:$PORT              # what a deployment runs
 ```
 
-Then open `http://localhost:8000/` (or the `PORT` you set). The mirror is loaded and kept current by
-`python3 src/mirror/load.py` and `python3 src/mirror/sync.py`.
+Then open `http://localhost:8000/` (or the `PORT` you set). A new database is empty, and the
+server never fills it: run the mirror worker beside the server (see
+[Keeping the mirror current](#keeping-the-mirror-current)). Until it has finished a first load the
+page says so instead of showing empty lists.
+
+## Keeping the mirror current
+
+The mirror is a Postgres copy of three HRM layers, and one process keeps it: the worker.
+
+```bash
+python3 src/mirror/worker.py
+```
+
+It needs no arguments and no credentials for HRM, and it is the only thing a deployment runs to
+do this. Each cycle it takes the mirror's sync lock, creates whatever part of the schema is
+missing, runs `sync.sync()`, and works out how long to sleep:
+
+- **The first cycle against an empty database is the initial load.** A layer that has never
+  completed a load counts as advanced, so the same code that polls every day loads everything
+  the first time. There is no separate first-run step. The load takes a while; about 25 minutes
+  when last measured on a local machine, and not yet measured from a host.
+- **After a success** it sleeps until the mirror's own next-due time (a day after the last poll),
+  never less than five minutes. That is the same time the page shows as the next update.
+- **After a failure** it sleeps an hour, whatever the due time says, and tries again. Nothing
+  retries in a loop, so an outage or a rate limit at HRM is not met with a burst of requests. A
+  layer that fails does not stop the others from being attempted.
+- **A killed worker loses nothing.** A reload commits page by page and swaps in one transaction, so
+  the version held stays whole, and the next cycle resumes the staged copy where it stopped.
+
+While the mirror has no completed load the served page shows one message in place of the lists,
+the map and the filters, and reloads itself when the mirror is ready. It says which of three
+things is happening: the structure does not exist yet, the first load is running, or the first
+load did not finish and will be tried again. It never says a first load is overdue.
+
+`python3 src/mirror/load.py` and `python3 src/mirror/sync.py` remain as manual tools (`--reload`,
+`--force-pull`, `--history`, `--versions` and the rest are unchanged). Every mode that writes takes
+the same lock as the worker: run while the worker is mid-sync, it changes nothing, says so and exits
+with status 75. `--history`, `--versions` and `load.py --report` only read and do not take it.
+
+## Deploying on Railway
+
+Two services from this repository, both reading the same `PG*` variables, plus a Postgres service.
+Nothing in the code names a host; this is the setup, not a requirement.
+
+This section is written from Railway's documentation and from a local run of the worker. It has not
+yet been followed on a live deployment, so treat the first deployment as its check and correct it
+where it is wrong. The load time and disk figures below are local measurements, not Railway's.
+
+| | Start command | Notes |
+| --- | --- | --- |
+| web | `gunicorn wsgi:app --bind 0.0.0.0:$PORT` | If a healthcheck is set, point it at `/`, which reads no database. A route that reads the database would hold every deployment until the first load finished. |
+| worker | `python3 src/mirror/worker.py` | Restart policy *Always*. It exits only when a `PG*` variable is missing, so it cannot crash-loop on a transient error. |
+
+- **Variables.** Give both services `PGHOST`, `PGUSER`, `PGDATABASE`, `PGPORT` and `PGPASSWORD`, as
+  reference variables to the Postgres service. The worker fails at start, naming the missing one,
+  if any required variable is empty.
+- **Order does not matter.** The web service can start before the worker has created anything;
+  it shows the not-set-up state until it has. Only the worker creates the schema: the web service
+  never runs DDL.
+- **A redeploy is harmless.** Both services redeploy on every push. The worker restarts, polls
+  once, and resumes any staged reload. Railway overlaps the old and new deployments for a short
+  time; the sync lock means only one of them syncs.
+- **Watching the first load.** The worker's log shows each layer's pages; `sync_runs` records the
+  elapsed time and page counts, and `python3 src/mirror/load.py --report` compares stored and source
+  counts with the on-disk size.
+- **Disk.** A reload holds the live and the staged copies together: allow roughly twice the data
+  (about 375 MB each when last measured) plus write-ahead log. Check the Postgres plan's storage
+  limit before the first deploy.
+- **Connections.** The sync lock is a session-level advisory lock, so the database must be reached
+  directly or through a pooler in session mode. A transaction-mode pooler would silently break it.
+- **Stopping.** Stop the worker service to stop syncing; the manual commands still work. The page
+  reads overdue about two days after the last successful poll (the due time a day out, plus a day's
+  grace), which is the signal that the worker is not running.
 
 ## Where a list leaves the application
 
@@ -49,8 +120,40 @@ No keys and no install for the viewer: opening the board takes nothing but a bro
 
 The mirror and the server do have dependencies, listed in `requirements.txt` (this project
 previously had no manifest at all): a Postgres database and a Python dependency set (Flask
-behind a WSGI server such as gunicorn). `src/hotspots.py` stays stdlib-only, and a viewer still
+behind a WSGI server such as gunicorn). There is no Redis, broker or task queue: the mirror's
+own tables hold what a scheduler would. `src/hotspots.py` stays stdlib-only, and a viewer still
 installs nothing.
+
+## Database configuration
+
+The database is configured with the standard Postgres environment variables, which `psql` and
+`pg_isready` read too. The sync, the load, the derivation, the served application and the
+tests all connect from these and from nothing else; no connection string, host, user or
+password is held in the repository.
+
+| Variable | |
+| --- | --- |
+| `PGHOST` | required: the server's host, or a unix socket directory |
+| `PGUSER` | required: the role to connect as |
+| `PGDATABASE` | required: the database to connect to |
+| `PGPORT` | optional: defaults to 5432 |
+| `PGPASSWORD` | optional: leave it out for passwordless authentication or a `~/.pgpass` entry |
+
+Copy `.env.example` to `.env` at the repository root and fill it in. `.env` is git-ignored and
+is read from the repository root whatever directory you run from. A variable already set in
+your shell or on the host wins over the file, and a host that sets them needs no file. Install
+the loader with `venv/bin/pip install -r requirements.txt`.
+
+If a required variable is missing, or empty, the command stops with an error that names it.
+The served application refuses to start rather than failing on its first request. A database
+that is configured but does not answer is an error too: nothing falls back to another host.
+
+The tests run with `venv/bin/pytest`. A test marked `db`, which is most of them, **errors**,
+and is never skipped, when the database is unconfigured or unreachable, so a run with no
+database cannot pass. The tests that need no database still run without any configuration.
+The `db` tests create and drop a `mirror_test_<pid>` schema in whichever database
+`PGDATABASE` names, and never touch the `mirror` schema, so point them at a database you do
+not mind them writing to.
 
 ## Lists from the command line
 
@@ -70,8 +173,9 @@ same lists, map and triage, and the exports above replace the one thing the file
 does not, being something you could mail or archive. The last commit that still has the `out/`
 files and the template is `b04731c`; read any of them with `git show b04731c:<path>`, for example
 `git show b04731c:out/watchlist.csv` or `git show b04731c:web/template.html`. Nothing runs on a schedule in this repository any more:
-the nightly workflow that committed to `out/` has been removed, and scheduled work moves to the
-deployment that serves the application.
+the nightly workflow that committed to `out/` has been removed, and the schedule belongs to the
+mirror worker in the deployment that serves the application (see
+[Keeping the mirror current](#keeping-the-mirror-current)).
 
 ## What it found
 

@@ -154,6 +154,17 @@ footer h3{font-family:"Barlow Condensed",sans-serif;font-size:14px;letter-spacin
    with plain .stale (HRM going quiet does not by itself mean this sync
    missed its own poll). */
 .freshness.stale,.freshness.behind,.freshness.overdue{border-color:var(--alert);background:var(--alert-soft);color:var(--ink)}
+/* Not-ready view (change automate-mirror-bootstrap-and-sync, design D9). While the
+   mirror is not ready one message replaces everything that would otherwise read as a
+   result: an empty table under a filter bar invites "no doorways", and the header
+   stats would read "0 doorways still calling". Neutral, not the alert colour: a first
+   load in progress is not a fault. */
+.not-ready{margin:0 0 18px;padding:18px 22px;border:1px solid var(--line-2);border-radius:3px;
+  background:var(--surface-2);color:var(--ink);max-width:74ch}
+.not-ready h2{margin:0 0 6px;font-size:18px}
+.not-ready p{margin:0;color:var(--ink-2)}
+.mirror-not-ready .intro,.mirror-not-ready .toolbar,.mirror-not-ready .workspace,
+.mirror-not-ready #eyebrow-latest{display:none}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
 /* ---- map ---- */
@@ -338,7 +349,7 @@ canvas#cv{display:block;width:100%;height:100%}
        belong to (doorPayload.type -- see the "Header figures" IIFE below),
        not hard-coded: this same file serves every tracked type, so a fixed
        "blocked driveway" here would name the wrong type on 29 of 30 routes. -->
-  <p class="eyebrow">Halifax Regional Municipality &middot; violation type: <span id="type-name">&hellip;</span> &middot; open data to <span id="latest-date">&hellip;</span></p>
+  <p class="eyebrow">Halifax Regional Municipality &middot; violation type: <span id="type-name">&hellip;</span><span id="eyebrow-latest"> &middot; open data to <span id="latest-date">&hellip;</span></span></p>
   <!-- Tasks 7.1/7.3/7.4a: the mirror's own freshness, dated rather than
        asserted -- see the boot() fetch of /api/freshness below, which fills
        this in and adds .stale if the newest call the mirror holds is
@@ -371,6 +382,13 @@ canvas#cv{display:block;width:100%;height:100%}
   </div>
   <div class="banner" id="dbstate" role="status" hidden></div>
 </header>
+
+<!-- Shown in place of the lists, the map and the filters while the mirror is not
+     ready; filled and revealed by the readiness gate in the script below. -->
+<section class="not-ready" id="not-ready" role="status" hidden>
+  <h2 id="not-ready-title"></h2>
+  <p id="not-ready-body"></p>
+</section>
 
 <section class="toolbar" aria-label="Filter map and list">
   <div class="toolbar-top">
@@ -653,6 +671,70 @@ function exportHrefs(slug, get){
   return {csv: `/api/types/${slug}/export.csv${q}`, brief: `/types/${slug}/export${q}`};
 }
 
+/* MIRROR-READINESS GATE (begin)
+ * Change automate-mirror-bootstrap-and-sync, design D9. The web service is up as soon as
+ * gunicorn starts, so a viewer can arrive while the mirror does not exist yet, is
+ * empty, or is mid first load. `/api/freshness` names which (`readiness`). Until it
+ * says "ready" this page fetches no list, draws no map and shows one message; it then
+ * asks again every 30 seconds and reloads once when the mirror is ready, so the ready
+ * page is the ordinary boot() one however the viewer arrived at it. A 503 is a state,
+ * not a failure: the body names it. Any other failure to ask (a network error, a body
+ * that is not JSON) leaves whatever is on screen and tries again at the next tick; it
+ * never reports the mirror as ready or as failed. Self-contained on purpose: the tests
+ * run exactly this text against a stub page. */
+const READINESS_POLL_MS = 30000;
+const NOT_READY_TEXT = {
+  uninitialised: {
+    banner: "Mirror: not set up yet.",
+    title: "This service is being set up",
+    body: "The data store for this page has not been created yet. This page will fill in by itself once it has been.",
+  },
+  loading: {
+    banner: "Mirror: loading for the first time.",
+    title: "Loading HRM's data for the first time",
+    body: "The first load takes a while. This page will refresh itself when it finishes.",
+  },
+  awaiting_first_load: {
+    banner: "Mirror: first load not completed yet.",
+    title: "The first load has not completed",
+    body: "It did not finish and will be tried again automatically. This page will refresh itself once it has.",
+  },
+};
+/* The one request for the mirror's clocks: the gate reads its readiness, and the
+ * freshness banner below reads the rest of it, so a ready page makes exactly the one
+ * request it always did. */
+const FRESHNESS_PRELOAD = fetch("/api/freshness");
+async function readinessOf(request){
+  try{
+    const resp = await request;
+    const body = await resp.clone().json();
+    return typeof body.readiness === "string" ? body.readiness : null;
+  }catch(e){ return null; }
+}
+function showNotReady(state){
+  const text = NOT_READY_TEXT[state];
+  document.body.classList.add("mirror-not-ready");
+  document.getElementById("not-ready-title").textContent = text.title;
+  document.getElementById("not-ready-body").textContent = text.body;
+  document.getElementById("not-ready").hidden = false;
+  const banner = document.getElementById("freshness");
+  if (banner) banner.textContent = text.banner;
+}
+async function gateThenBoot(startPage){
+  const state = await readinessOf(FRESHNESS_PRELOAD);
+  if (!(state in NOT_READY_TEXT)) return startPage();       // ready, or not something to gate on
+  showNotReady(state);
+  const tick = async () => {
+    let next = null;
+    try{ next = await readinessOf(fetch("/api/freshness")); }catch(e){}
+    if (next === "ready"){ location.reload(); return; }
+    if (next in NOT_READY_TEXT) showNotReady(next);
+    setTimeout(tick, READINESS_POLL_MS);
+  };
+  setTimeout(tick, READINESS_POLL_MS);
+}
+/* MIRROR-READINESS GATE (end) */
+
 async function boot(){
 const banner = document.getElementById("dbstate");
 const showBanner = msg => { banner.textContent = msg; banner.hidden = !msg; };
@@ -783,7 +865,8 @@ let TOW_KEY = null;
   const fmt = iso => iso ? new Date(iso).toLocaleString(undefined,
     {dateStyle: "medium", timeStyle: "short"}) : null;
   try{
-    const resp = await fetch("/api/freshness");
+    const resp = await (typeof FRESHNESS_PRELOAD !== "undefined" ? FRESHNESS_PRELOAD
+                                                                  : fetch("/api/freshness"));
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const f = await resp.json();
     const lastSync = fmt(f.last_success_at);
@@ -1949,7 +2032,7 @@ loadDecisions();
 })();
 
 }
-boot();
+gateThenBoot(boot);
 </script>
 
 </body>

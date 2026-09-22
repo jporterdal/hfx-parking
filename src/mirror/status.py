@@ -8,7 +8,7 @@ distinction that makes a sync failing repeatedly visible rather than merely stal
 `sync.py` is the only thing that changes either.
 """
 
-from mirror import sync
+from mirror import db, sync
 
 # The layer whose rows carry the calls a viewer reads. The "most recent call date"
 # clock is about this layer specifically — custom_fields and census_areas carry no
@@ -21,6 +21,13 @@ DATA_LAYER = "service_requests"
 # schedule that never fires as staleness.
 TRACKED_LAYERS = ("service_requests", "custom_fields", "census_areas")
 CURRENCY_LAYERS = ("service_requests", "custom_fields")
+
+# The mirror's readiness (spec: "Publish whether the mirror is ready to be read"). The
+# values are what `/api/freshness` serves and what the page branches on.
+UNINITIALISED = "uninitialised"
+AWAITING_FIRST_LOAD = "awaiting_first_load"
+LOADING = "loading"
+READY = "ready"
 
 _STATE_COLUMNS = (
     "layer", "source_last_edit", "last_attempt_at", "last_attempt_ok",
@@ -39,6 +46,36 @@ def layer_state_row(conn, layer_key):
         )
         row = cur.fetchone()
     return dict(zip(_STATE_COLUMNS, row)) if row else None
+
+
+def mirror_readiness(conn, layers=TRACKED_LAYERS):
+    """Is there a mirror to read, and if not, is one being made? design.md D5.
+
+    - `UNINITIALISED`: the structure does not exist, so nothing has ever run here.
+    - `READY`: every tracked layer, census included, has completed a load
+      (`layer_state.full_load_completed_at`). A later reload in progress does not
+      change this: the version held stays whole and queryable until it is swapped.
+    - `LOADING` / `AWAITING_FIRST_LOAD`: not ready, told apart by whether another
+      session holds the sync lock *right now*.
+
+    The lock, not a `sync_runs` row, decides "loading". A row saying "running" outlives
+    a run that was killed, and would report a dead first load as loading for ever; a
+    session lock disappears with its session.
+
+    Reads only. Note a poll writes `layer_state` (and its `last_success_at`) before any
+    load has finished, which is why readiness is read from `full_load_completed_at` and
+    never inferred from the presence of a row or a success time.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s)", (f"{db.schema()}.layer_state",))
+        if cur.fetchone()[0] is None:
+            return UNINITIALISED
+        cur.execute("SELECT layer FROM layer_state "
+                    "WHERE full_load_completed_at IS NOT NULL")
+        completed = {row[0] for row in cur.fetchall()}
+    if set(layers) <= completed:
+        return READY
+    return LOADING if db.sync_lock_held(conn) else AWAITING_FIRST_LOAD
 
 
 def most_recent_call_date(conn):

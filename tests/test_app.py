@@ -1544,6 +1544,15 @@ def set_layer_state(conn, layer, **fields):
     conn.commit()
 
 
+def mark_loaded(conn, when=None):
+    """Say every layer has completed a load, which is what makes the mirror `ready`.
+    The freshness tests below seed clocks by hand; without this they describe a mirror
+    that has never finished its first load, where (correctly) nothing is overdue."""
+    when = when or datetime.datetime(2026, 9, 1, tzinfo=datetime.UTC)
+    for layer in ("service_requests", "custom_fields", "census_areas"):
+        set_layer_state(conn, layer, full_load_completed_at=when)
+
+
 def test_freshness_route_reports_the_four_clocks(client, clean_db):
     """Task 7.1: last successful sync and next-due are both present, and are
     read off `mirror.status.mirror_freshness` (task 3.3), not recomputed."""
@@ -1553,13 +1562,15 @@ def test_freshness_route_reports_the_four_clocks(client, clean_db):
         set_layer_state(clean_db, layer, source_last_edit=success, last_attempt_at=success,
                         last_attempt_ok=True, last_success_at=success, next_due_at=due)
     seed_driveway_call(clean_db, 9001, "1 FIRST ST, HALIFAX", success - datetime.timedelta(days=2))
+    mark_loaded(clean_db)
 
     resp = client.get("/api/freshness")
 
     assert resp.status_code == 200
     payload = resp.get_json()
+    assert payload["readiness"] == "ready"
     assert set(payload) == {
-        "checked_at", "most_recent_call_date", "last_success_at",
+        "readiness", "checked_at", "most_recent_call_date", "last_success_at",
         "last_attempt_at", "next_due_at", "behind_source", "behind_reason",
         "stale_call_warning", "next_update", "next_source_estimate",
     }
@@ -1747,6 +1758,7 @@ def test_next_update_reads_overdue_once_the_grace_period_has_passed_with_no_succ
         set_layer_state(clean_db, layer, source_last_edit=last_success,
                          last_attempt_at=last_success, last_attempt_ok=True,
                          last_success_at=last_success, next_due_at=due)
+    mark_loaded(clean_db)
 
     payload = client.get("/api/freshness").get_json()
 
@@ -1766,6 +1778,7 @@ def test_next_update_is_healthy_when_next_due_at_is_in_the_future(client, clean_
         set_layer_state(clean_db, layer, source_last_edit=now,
                          last_attempt_at=now, last_attempt_ok=True,
                          last_success_at=now, next_due_at=due)
+    mark_loaded(clean_db)
 
     payload = client.get("/api/freshness").get_json()
 
@@ -2571,13 +2584,17 @@ def _record_sync(conn, finished_at, source_edit):
     """One completed sync of both currency layers: `layer_state` moves to it
     (that is where `mirror_freshness` reads the clocks) and a `sync_runs` row
     is left behind (that is where a reader looking for "some earlier sync"
-    would find one)."""
+    would find one). A completed sync has completed a load of every layer, which is
+    what makes the mirror ready; without that the views would (correctly) say nothing
+    has been loaded rather than "no doorways match"."""
     for layer in ("service_requests", "custom_fields"):
         set_layer_state(conn, layer, source_last_edit=source_edit,
                         last_attempt_at=finished_at, last_attempt_ok=True,
                         last_success_at=finished_at,
-                        next_due_at=finished_at + datetime.timedelta(days=1))
+                        next_due_at=finished_at + datetime.timedelta(days=1),
+                        full_load_completed_at=finished_at)
         insert_pulled_edit(conn, layer, source_edit, finished_at=finished_at)
+    set_layer_state(conn, "census_areas", full_load_completed_at=finished_at)
 
 
 def _seed_first_sync_state(conn):

@@ -285,11 +285,16 @@ def world(db):
         for layer in ("service_requests", "custom_fields"):
             cur.execute(
                 "INSERT INTO layer_state (layer, source_last_edit, last_attempt_at, last_attempt_ok, "
-                "last_success_at, next_due_at) VALUES (%s,%s,%s,true,%s,%s)",
-                (layer, SYNC - DAY, SYNC, SYNC, SYNC + DAY))
+                "last_success_at, next_due_at, full_load_completed_at) "
+                "VALUES (%s,%s,%s,true,%s,%s,%s)",
+                (layer, SYNC - DAY, SYNC, SYNC, SYNC + DAY, SYNC))
             cur.execute(
                 "INSERT INTO sync_runs (kind, layer, started_at, finished_at, ok, source_last_edit) "
                 "VALUES ('reload',%s,%s,%s,true,%s)", (layer, SYNC, SYNC, SYNC - DAY))
+        # a completed sync has loaded the census layer too, which is what makes the
+        # mirror ready: an unready one says nothing has been loaded, not "no doorways"
+        cur.execute("INSERT INTO layer_state (layer, full_load_completed_at) "
+                    "VALUES ('census_areas', %s)", (SYNC,))
     db.commit()
     stored = mirror_type_figures.compute_and_store(
         db, types=[CANONICAL[BD], CANONICAL[NPS], CANONICAL[METER], CANONICAL[PP]], log=lambda m: None)

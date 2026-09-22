@@ -92,14 +92,19 @@ def freeze_server_clock(monkeypatch, now):
 
 
 def seed_clocks(conn, *, success, due, attempt=None, attempt_ok=True, source_edit=None):
-    """Both currency layers' `layer_state`, the way a sync leaves it."""
+    """Both currency layers' `layer_state`, the way a sync leaves it, and the census
+    layer's completed load. A mirror that has synced successfully has finished its first
+    load, which is what makes it `ready`; without that, nothing here could be overdue
+    (there would be no promise to be late on)."""
     attempt = attempt or success
     for layer in CURRENCY:
         set_layer_state(
             conn, layer, source_last_edit=source_edit or success,
             last_attempt_at=attempt, last_attempt_ok=attempt_ok,
             last_success_at=success, next_due_at=due,
+            full_load_completed_at=success,
         )
+    set_layer_state(conn, "census_areas", full_load_completed_at=success)
 
 
 def refusal(calls, name):
@@ -298,6 +303,9 @@ def failed_sync(clean_db, monkeypatch):
         m.setattr(source, "last_edit_date", lambda layer: t0 - 2 * DAY)
         for key in sync.SYNC_ORDER:
             sync.poll_layer(clean_db, source.LAYERS[key], t0)
+            # "synced successfully at T0" includes having loaded, which is what makes
+            # the mirror ready and so able to be overdue
+            set_layer_state(clean_db, key, full_load_completed_at=t0)
 
     calls = []
     real_post = source.post
@@ -326,8 +334,9 @@ def test_a_sync_that_fails_because_hrm_is_unreachable_is_recorded_and_changes_no
     layer_before = status.layer_freshness(clean_db, "service_requests")
     assert layer_before["last_success_at"] == failed_sync.t0
 
-    with pytest.raises(urllib.error.URLError):
-        sync.sync(clean_db, now=failed_sync.t1, log=lambda m: None)
+    outcome = sync.sync(clean_db, now=failed_sync.t1, log=lambda m: None)
+    assert not outcome["ok"]
+    assert all(e.startswith("URLError") for e in outcome["errors"].values())
     assert failed_sync.calls, "the failure path was not actually driven through the network call"
 
     with clean_db.cursor() as cur:
@@ -351,8 +360,9 @@ def test_after_a_failed_sync_the_views_state_both_the_last_attempt_and_the_last_
     """9.1.2 / design M4 "last attempt vs last success": the served picture names
     the last attempt (T1) and the last success (T0) as two different instants."""
     freeze_server_clock(monkeypatch, NOW)
-    with pytest.raises(urllib.error.URLError):
-        sync.sync(clean_db, now=failed_sync.t1, log=lambda m: None)
+    outcome = sync.sync(clean_db, now=failed_sync.t1, log=lambda m: None)
+    assert not outcome["ok"]
+    assert all(e.startswith("URLError") for e in outcome["errors"].values())
     t0, t1 = failed_sync.t0, failed_sync.t1
 
     api = client.get("/api/freshness").get_json()
@@ -376,8 +386,9 @@ def test_the_page_banner_states_the_last_success_not_the_failed_attempt(
     T0 is 01:00 Halifax on 18 Sep while T1 is 03:00, and only the first may appear.
     The page renders no "last attempt" line; that is available from the API and CSV."""
     freeze_server_clock(monkeypatch, NOW)
-    with pytest.raises(urllib.error.URLError):
-        sync.sync(clean_db, now=failed_sync.t1, log=lambda m: None)
+    outcome = sync.sync(clean_db, now=failed_sync.t1, log=lambda m: None)
+    assert not outcome["ok"]
+    assert all(e.startswith("URLError") for e in outcome["errors"].values())
 
     payload, out = banner_for(
         client, monkeypatch,
@@ -542,8 +553,9 @@ def test_failing_every_hour_is_overdue_not_healthy(client, clean_db, failed_sync
                     "next_due_at = %s", (old_success, old_success, old_success + DAY))
     clean_db.commit()
     for hours_ago in range(24, 0, -1):
-        with pytest.raises(urllib.error.URLError):
-            sync.sync(clean_db, now=NOW - hours_ago * HOUR, log=lambda m: None)
+        outcome = sync.sync(clean_db, now=NOW - hours_ago * HOUR, log=lambda m: None)
+        assert not outcome["ok"]
+        assert all(e.startswith("URLError") for e in outcome["errors"].values())
 
     payload = client.get("/api/freshness").get_json()
 
@@ -555,7 +567,9 @@ def test_failing_every_hour_is_overdue_not_healthy(client, clean_db, failed_sync
 
     with clean_db.cursor() as cur:
         cur.execute("SELECT count(*) FROM sync_runs WHERE kind = 'poll' AND NOT ok")
-        assert cur.fetchone()[0] == 24
+        # every layer is attempted, and fails, on every run (a failure in one layer no
+        # longer ends the run), so three failed polls an hour and not one
+        assert cur.fetchone()[0] == 24 * 3
 
 
 @_NEEDS_NODE
@@ -570,8 +584,9 @@ def test_failing_every_hour_reads_overdue_on_the_page_and_names_the_stale_succes
                     "next_due_at = %s", (old_success, old_success, old_success + DAY))
     clean_db.commit()
     for hours_ago in range(24, 0, -1):
-        with pytest.raises(urllib.error.URLError):
-            sync.sync(clean_db, now=NOW - hours_ago * HOUR, log=lambda m: None)
+        outcome = sync.sync(clean_db, now=NOW - hours_ago * HOUR, log=lambda m: None)
+        assert not outcome["ok"]
+        assert all(e.startswith("URLError") for e in outcome["errors"].values())
 
     payload, out = banner_for(client, monkeypatch, probes=(
         payload_iso(old_success), payload_iso(NOW - HOUR), payload_iso(old_success + DAY)))

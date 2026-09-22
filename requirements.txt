@@ -9,6 +9,9 @@
 psycopg[binary]==3.3.5
 pytest==9.1.1
 
+# Loads the local .env (database connection; see .env.example) into the environment.
+python-dotenv==1.2.3
+
 # Task 5.1: the served application (design.md M12). Flask is synchronous and
 # small; a production WSGI server such as gunicorn runs it. src/hotspots.py
 # stays stdlib-only -- these are the server's dependencies, not the viewer's.
