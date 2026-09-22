@@ -1302,6 +1302,10 @@ def create_app(conn_factory=None):
     def index():
         return send_from_directory(APP_WEB_DIR, "index.html")
 
+    @app.get("/pitch")
+        def pitch():
+            return send_from_directory(APP_WEB_DIR, "pitch.html")
+
     @app.get("/types/<slug>")
     def type_page(slug):
         """The same page `index()` serves, at a per-type URL (task 5.2). One
