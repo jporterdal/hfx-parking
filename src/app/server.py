@@ -1303,8 +1303,8 @@ def create_app(conn_factory=None):
         return send_from_directory(APP_WEB_DIR, "index.html")
 
     @app.get("/pitch")
-        def pitch():
-            return send_from_directory(APP_WEB_DIR, "pitch.html")
+    def pitch():
+        return send_from_directory(APP_WEB_DIR, "pitch.html")
 
     @app.get("/types/<slug>")
     def type_page(slug):
