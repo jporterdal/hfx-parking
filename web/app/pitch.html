@@ -124,11 +124,15 @@ footer.cta{display:flex;align-items:center;gap:12px;margin-top:8px}
 .navbtn[disabled]{opacity:0;pointer-events:none}
 .slidenum{position:fixed;top:16px;right:20px;z-index:6;font-family:"JetBrains Mono",monospace;
   font-size:11px;color:var(--muted);letter-spacing:.08em}
+.back{position:fixed;top:16px;left:20px;z-index:6;font-family:"JetBrains Mono",monospace;
+  font-size:11px;letter-spacing:.08em;color:var(--muted);text-decoration:none}
+.back:hover{color:var(--accent)}
 </style>
 </head>
 <body>
 <div class="hazard"></div>
 <div class="progress"><i id="progress"></i></div>
+<a class="back" href="index.html">&larr; Back to the map</a>
 <div class="slidenum"><span id="slidenum">1</span> / 2</div>
 
 <div class="deck" id="deck">
